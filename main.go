@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -12,10 +13,12 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"text/template"
 	"time"
 )
 
@@ -33,18 +36,35 @@ func (cs *CommandSlice) UnmarshalJSON(data []byte) error {
 		}
 
 		for _, v := range m {
-			if len(v) > 6 && v[0] == '[' && v[1] == '[' && v[2] == '"' && v[len(v)-3] == '"' && v[len(v)-2] == ']' && v[len(v)-1] == ']' {
-				err = json.Unmarshal([]byte(v), &s)
+			if len(v) > 2 && v[0] == '"' && v[len(v)-1] == '"' {
+				commandName := ""
+				err = json.Unmarshal([]byte(v), &commandName)
 				if err != nil {
 					return err
 				}
 
-				*cs = CommandSlice(s)
+				*cs = CommandSlice([][]string{{commandName}})
 				break
 			}
+
+			err = json.Unmarshal([]byte(v), &s)
+			if err != nil {
+				return err
+			}
+
+			*cs = CommandSlice(s)
+			break
 		}
 
 		return nil
+	} else if len(data) > 2 && data[0] == '"' && data[len(data)-1] == '"' {
+		commandName := ""
+		err := json.Unmarshal(data, &commandName)
+		if err == nil {
+			*cs = CommandSlice([][]string{{commandName}})
+		}
+
+		return err
 	}
 
 	err := json.Unmarshal(data, &s)
@@ -75,12 +95,14 @@ type Config struct {
 	} `json:"httpServer"`
 
 	UdpServer struct {
-		Enabled bool   `json:"enabled"`
-		Address string `json:"address"`
+		Enabled         bool     `json:"enabled"`
+		Address         string   `json:"address"`
+		HandlerTemplate []string `json:"handlerTemplate"`
 	} `json:"udpServer"`
 
 	StdinCommands struct {
-		Enabled bool `json:"enabled"`
+		Enabled         bool     `json:"enabled"`
+		HandlerTemplate []string `json:"handlerTemplate"`
 	} `json:"stdinCommands"`
 
 	Adb struct {
@@ -128,6 +150,11 @@ type Config struct {
 	} `json:"videoDecoder"`
 }
 
+type CommandHandlerData struct {
+	From     string       `json:"from"`
+	Commands CommandSlice `json:"commands"`
+}
+
 var stdinDecoder *json.Decoder
 var config Config
 var listener net.Listener
@@ -151,6 +178,89 @@ var videoFrame []byte
 var videoFrameWidth int
 var videoFrameHeight int
 var videoFrameMutex sync.RWMutex
+var udpServerHandlerChannel chan *CommandHandlerData = make(chan *CommandHandlerData)
+var stdinCommandHandlerChannel chan *CommandHandlerData = make(chan *CommandHandlerData)
+
+var commandHandlerFuncs template.FuncMap = template.FuncMap{
+	"atoi": func(s string) []int {
+		i, err := strconv.Atoi(s)
+		if err != nil {
+			return nil
+		}
+
+		return []int{i}
+	},
+	"contains":  strings.Contains,
+	"hasprefix": strings.HasPrefix,
+	"hassuffix": strings.HasSuffix,
+	"lower":     strings.ToLower,
+	"upper":     strings.ToUpper,
+	"split":     strings.Split,
+	"join":      strings.Join,
+	"match":     regexp.MatchString,
+	"run": func(cs CommandSlice, wait bool) bool {
+		if wait {
+			return commandsRun(cs)
+		}
+		go commandsRun(cs)
+		return true
+	},
+	"exec": func(stdin string, name string, arg ...string) (result struct {
+		Success bool
+		Output  string
+	}) {
+		cmd := exec.Command(name, arg...)
+		if stdin != "" {
+			cmd.Stdin = strings.NewReader(stdin)
+		}
+		output, err := cmd.CombinedOutput()
+		result.Success = err == nil
+		result.Output = string(output)
+		return
+	},
+	"http": func(method string, url string, body string, timeout int, headers ...[2]string) (result struct {
+		StatusCode int
+		Headers    map[string][]string
+		Body       string
+	}) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
+		defer cancel()
+
+		var bodyReader io.Reader
+		if body != "" {
+			bodyReader = strings.NewReader(body)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
+		if err != nil {
+			result.StatusCode = -1
+			return
+		}
+
+		for _, header := range headers {
+			req.Header.Add(header[0], header[1])
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			result.StatusCode = -1
+			return
+		}
+
+		result.StatusCode = resp.StatusCode
+		result.Headers = resp.Header
+		responseBodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		result.Body = string(responseBodyBytes)
+		return
+	},
+	"command": func(c ...string) CommandSlice {
+		return CommandSlice([][]string{c})
+	},
+	"header": func(key string, value string) [2]string {
+		return [2]string{key, value}
+	},
+}
 
 func list(serverArg string) (string, int) {
 	if !config.Adb.Enabled || !config.Scrcpy.Enabled || config.Scrcpy.Server == "" || config.Scrcpy.ServerVersion == "" {
@@ -382,18 +492,18 @@ func main() {
 		stdinDecoder = json.NewDecoder(os.Stdin)
 		err = stdinDecoder.Decode(&config)
 	} else if strings.HasPrefix(os.Args[1], "http://") || strings.HasPrefix(os.Args[1], "https://") {
-		response, err := http.Get(os.Args[1])
+		resp, err := http.Get(os.Args[1])
 		if err != nil {
 			panic(err)
 		}
 
-		if response.StatusCode != http.StatusOK {
-			response.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
 			os.Exit(1)
 		}
 
-		err = json.NewDecoder(response.Body).Decode(&config)
-		response.Body.Close()
+		err = json.NewDecoder(resp.Body).Decode(&config)
+		resp.Body.Close()
 	} else {
 		configFile, err := os.Open(os.Args[1])
 		if err != nil {
@@ -432,8 +542,99 @@ func main() {
 		os.Exit(1)
 	}
 
-	if config.UdpServer.Enabled && config.UdpServer.Address == "" {
-		os.Exit(1)
+	if config.UdpServer.Enabled {
+		if config.UdpServer.Address == "" {
+			os.Exit(1)
+		}
+
+		if len(config.UdpServer.HandlerTemplate) > 0 {
+			if config.UdpServer.HandlerTemplate[0] == "" {
+				os.Exit(1)
+			}
+
+			var t *template.Template
+
+			if strings.HasPrefix(config.UdpServer.HandlerTemplate[0], "http://") || strings.HasPrefix(config.UdpServer.HandlerTemplate[0], "https://") {
+				resp, err := http.Get(config.UdpServer.HandlerTemplate[0])
+				if err != nil {
+					panic(err)
+				}
+
+				if resp.StatusCode != http.StatusOK {
+					resp.Body.Close()
+					os.Exit(1)
+				}
+
+				bodyBytes, err := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if err != nil {
+					panic(err)
+				}
+
+				t = template.Must(template.New("").Funcs(commandHandlerFuncs).Parse(string(bodyBytes)))
+			} else if config.UdpServer.HandlerTemplate[0][0] == ' ' {
+				b, err := os.ReadFile(config.UdpServer.HandlerTemplate[0][1:])
+				if err != nil {
+					panic(err)
+				}
+
+				t = template.Must(template.New("").Funcs(commandHandlerFuncs).Parse(string(b)))
+			} else {
+				t = template.Must(template.New("").Funcs(commandHandlerFuncs).Parse(strings.Join(config.UdpServer.HandlerTemplate, "\n")))
+			}
+
+			go func() {
+				err := t.Execute(io.Discard, udpServerHandlerChannel)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, err)
+				}
+			}()
+		}
+
+	}
+
+	if config.StdinCommands.Enabled && len(config.StdinCommands.HandlerTemplate) > 0 {
+		if config.StdinCommands.HandlerTemplate[0] == "" {
+			os.Exit(1)
+		}
+
+		var t *template.Template
+
+		if strings.HasPrefix(config.StdinCommands.HandlerTemplate[0], "http://") || strings.HasPrefix(config.StdinCommands.HandlerTemplate[0], "https://") {
+			resp, err := http.Get(config.StdinCommands.HandlerTemplate[0])
+			if err != nil {
+				panic(err)
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				resp.Body.Close()
+				os.Exit(1)
+			}
+
+			bodyBytes, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				panic(err)
+			}
+
+			t = template.Must(template.New("").Funcs(commandHandlerFuncs).Parse(string(bodyBytes)))
+		} else if config.StdinCommands.HandlerTemplate[0][0] == ' ' {
+			b, err := os.ReadFile(config.StdinCommands.HandlerTemplate[0][1:])
+			if err != nil {
+				panic(err)
+			}
+
+			t = template.Must(template.New("").Funcs(commandHandlerFuncs).Parse(string(b)))
+		} else {
+			t = template.Must(template.New("").Funcs(commandHandlerFuncs).Parse(strings.Join(config.StdinCommands.HandlerTemplate, "\n")))
+		}
+
+		go func() {
+			err := t.Execute(io.Discard, stdinCommandHandlerChannel)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+		}()
 	}
 
 	if config.Scrcpy.Enabled {
@@ -781,16 +982,24 @@ func main() {
 			defer c.Close()
 
 			data := make([]byte, 1024)
-			var cs CommandSlice
 
 			for {
-				n, _, err := c.ReadFrom(data)
+				n, addr, err := c.ReadFrom(data)
 				if err != nil {
 					break
 				}
 
+				var cs CommandSlice
+
 				if json.Unmarshal(data[:n], &cs) == nil && len(cs) > 0 {
-					commandsRun(cs)
+					if len(config.UdpServer.HandlerTemplate) == 0 {
+						go commandsRun(cs)
+					} else {
+						udpServerHandlerChannel <- &CommandHandlerData{
+							From:     addr.String(),
+							Commands: cs,
+						}
+					}
 				}
 			}
 		}()
@@ -802,9 +1011,9 @@ func main() {
 				stdinDecoder = json.NewDecoder(os.Stdin)
 			}
 
-			var cs CommandSlice
-
 			for {
+				var cs CommandSlice
+
 				err = stdinDecoder.Decode(&cs)
 				if err != nil {
 					if err == io.EOF {
@@ -815,7 +1024,14 @@ func main() {
 
 					fmt.Fprintln(os.Stderr, err)
 				} else if len(cs) > 0 {
-					commandsRun(cs)
+					if len(config.StdinCommands.HandlerTemplate) == 0 {
+						commandsRun(cs)
+					} else {
+						stdinCommandHandlerChannel <- &CommandHandlerData{
+							From:     "stdin",
+							Commands: cs,
+						}
+					}
 				}
 			}
 		}()

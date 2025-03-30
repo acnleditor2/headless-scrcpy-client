@@ -28,14 +28,10 @@ func commandsRun(commands CommandSlice) bool {
 			}
 		}
 
-		if config.Scrcpy.Port < 1 {
-			if command[0] != "sleep" && command[0] != "adb" && command[0] != "adb2" {
-				return false
-			}
-		} else if controlSocket == nil {
-			if command[0] != "connect" && command[0] != "startscrcpyserver" && command[0] != "sleep" && command[0] != "adb" && command[0] != "adb2" && command[0] != "setconnectedcommands" {
-				return false
-			}
+		if !config.Scrcpy.Enabled && command[0] != "sleep" && command[0] != "adb" && command[0] != "adb2" {
+			return false
+		} else if controlSocket == nil && command[0] != "connect" && command[0] != "startscrcpyserver" && command[0] != "sleep" && command[0] != "adb" && command[0] != "adb2" && command[0] != "setconnectedcommands" {
+			return false
 		}
 
 		switch command[0] {
