@@ -254,19 +254,24 @@ func inputUhidCreateDevice(reportDescString string, id int, name string, vendorI
 	return true
 }
 
-func inputUhidKeyboardInput(scancode int, modifiers int) bool {
-	data := make([]byte, 13)
-	data[0] = 0x0D
-	data[2] = 0x01
-	data[4] = 0x08
-	data[5] = byte(modifiers)
-	data[7] = byte(scancode)
-
-	n, err := controlSocket.Write(data)
+func inputUhidKeyboardInput(dataString string) bool {
+	data, err := hex.DecodeString(dataString)
 	if err != nil {
 		return false
 	}
-	if n != 13 {
+	if len(data) == 0 {
+		return false
+	}
+
+	var b bytes.Buffer
+
+	b.WriteByte(0x0D)
+	binary.Write(&b, binary.BigEndian, uint16(0x01))
+	binary.Write(&b, binary.BigEndian, uint16(len(data)))
+	b.Write(data)
+
+	_, err = b.WriteTo(controlSocket)
+	if err != nil {
 		return false
 	}
 
@@ -296,51 +301,48 @@ func inputUhidKeyboardSendOutputStream(w http.ResponseWriter, req *http.Request)
 	}
 }
 
-func inputUhidMouseInput(button int, x int, y int, wheelDirection string) bool {
-	data := make([]byte, 9)
-	data[0] = 0x0D
-	data[2] = 0x02
-	data[4] = 0x04
-	data[5] = byte(button)
-	data[6] = byte(x)
-	data[7] = byte(y)
-	switch wheelDirection {
-	case "up":
-		data[8] = 0x01
-	case "down":
-		data[8] = 0xFF
-	}
-
-	n, err := controlSocket.Write(data)
+func inputUhidMouseInput(dataString string) bool {
+	data, err := hex.DecodeString(dataString)
 	if err != nil {
 		return false
 	}
-	if n != 9 {
+	if len(data) == 0 {
+		return false
+	}
+
+	var b bytes.Buffer
+
+	b.WriteByte(0x0D)
+	binary.Write(&b, binary.BigEndian, uint16(0x02))
+	binary.Write(&b, binary.BigEndian, uint16(len(data)))
+	b.Write(data)
+
+	_, err = b.WriteTo(controlSocket)
+	if err != nil {
 		return false
 	}
 
 	return true
 }
 
-func inputUhidGamepadInput(leftX int, leftY int, rightX int, rightY int, leftTrigger int, rightTrigger int, buttons int, dpad int) bool {
-	data := make([]byte, 20)
-	data[0] = 0x0D
-	data[2] = 0x03
-	data[4] = 0x0F
-	binary.LittleEndian.PutUint16(data[5:], uint16(leftX))
-	binary.LittleEndian.PutUint16(data[7:], uint16(leftY))
-	binary.LittleEndian.PutUint16(data[9:], uint16(rightX))
-	binary.LittleEndian.PutUint16(data[11:], uint16(rightY))
-	binary.LittleEndian.PutUint16(data[13:], uint16(leftTrigger))
-	binary.LittleEndian.PutUint16(data[15:], uint16(rightTrigger))
-	binary.LittleEndian.PutUint16(data[17:], uint16(buttons))
-	data[19] = byte(dpad)
-
-	n, err := controlSocket.Write(data)
+func inputUhidGamepadInput(dataString string) bool {
+	data, err := hex.DecodeString(dataString)
 	if err != nil {
 		return false
 	}
-	if n != 20 {
+	if len(data) == 0 {
+		return false
+	}
+
+	var b bytes.Buffer
+
+	b.WriteByte(0x0D)
+	binary.Write(&b, binary.BigEndian, uint16(0x03))
+	binary.Write(&b, binary.BigEndian, uint16(len(data)))
+	b.Write(data)
+
+	_, err = b.WriteTo(controlSocket)
+	if err != nil {
 		return false
 	}
 

@@ -198,6 +198,30 @@ func commandsRun(commands CommandSlice) bool {
 			} else {
 				return false
 			}
+		case "uhidkeyboardinput":
+			if len(command) == 2 {
+				if !inputUhidKeyboardInput(command[1]) {
+					return false
+				}
+			} else {
+				return false
+			}
+		case "uhidmouseinput":
+			if len(command) == 2 {
+				if !inputUhidMouseInput(command[1]) {
+					return false
+				}
+			} else {
+				return false
+			}
+		case "uhidgamepadinput":
+			if len(command) == 2 {
+				if !inputUhidGamepadInput(command[1]) {
+					return false
+				}
+			} else {
+				return false
+			}
 		case "key", "key2":
 			if len(command) == 2 || len(command) == 5 {
 				var keycode int
@@ -240,36 +264,6 @@ func commandsRun(commands CommandSlice) bool {
 					}
 
 					if !inputSdkInjectKeycode(up, keycode, repeat, metaState) {
-						return false
-					}
-				}
-			} else {
-				return false
-			}
-		case "key3":
-			if len(command) == 2 || len(command) == 3 {
-				scancode, err := strconv.Atoi(command[1])
-				if err != nil {
-					return false
-				}
-
-				if len(command) == 2 {
-					if !inputUhidKeyboardInput(scancode, 0) {
-						return false
-					}
-
-					if scancode != 0 {
-						if !inputUhidKeyboardInput(0, 0) {
-							return false
-						}
-					}
-				} else {
-					modifiers, err := strconv.Atoi(command[2])
-					if err != nil {
-						return false
-					}
-
-					if !inputUhidKeyboardInput(scancode, modifiers) {
 						return false
 					}
 				}
@@ -429,25 +423,7 @@ func commandsRun(commands CommandSlice) bool {
 				return false
 			}
 		case "mouseclick":
-			if len(command) == 4 {
-				x, err := strconv.Atoi(command[2])
-				if err != nil {
-					return false
-				}
-
-				y, err := strconv.Atoi(command[3])
-				if err != nil {
-					return false
-				}
-
-				if !inputUhidMouseInput(inputGetMouseButton(command[1]), x, y, "") {
-					return false
-				}
-
-				if !inputUhidMouseInput(0, 0, 0, "") {
-					return false
-				}
-			} else if len(command) == 6 {
+			if len(command) == 6 {
 				x, err := strconv.Atoi(command[2])
 				if err != nil {
 					return false
@@ -481,21 +457,7 @@ func commandsRun(commands CommandSlice) bool {
 				return false
 			}
 		case "mousedown":
-			if len(command) == 4 {
-				x, err := strconv.Atoi(command[2])
-				if err != nil {
-					return false
-				}
-
-				y, err := strconv.Atoi(command[3])
-				if err != nil {
-					return false
-				}
-
-				if !inputUhidMouseInput(inputGetMouseButton(command[1]), x, y, "") {
-					return false
-				}
-			} else if len(command) == 6 {
+			if len(command) == 6 {
 				x, err := strconv.Atoi(command[2])
 				if err != nil {
 					return false
@@ -523,11 +485,7 @@ func commandsRun(commands CommandSlice) bool {
 				return false
 			}
 		case "mouseup":
-			if len(command) == 1 {
-				if !inputUhidMouseInput(0, 0, 0, "") {
-					return false
-				}
-			} else if len(command) == 6 {
+			if len(command) == 6 {
 				x, err := strconv.Atoi(command[2])
 				if err != nil {
 					return false
@@ -555,35 +513,7 @@ func commandsRun(commands CommandSlice) bool {
 				return false
 			}
 		case "mousemove":
-			if len(command) == 3 {
-				x, err := strconv.Atoi(command[1])
-				if err != nil {
-					return false
-				}
-
-				y, err := strconv.Atoi(command[2])
-				if err != nil {
-					return false
-				}
-
-				if !inputUhidMouseInput(0, x, y, "") {
-					return false
-				}
-			} else if len(command) == 4 {
-				x, err := strconv.Atoi(command[2])
-				if err != nil {
-					return false
-				}
-
-				y, err := strconv.Atoi(command[3])
-				if err != nil {
-					return false
-				}
-
-				if !inputUhidMouseInput(inputGetMouseButton(command[1]), x, y, "") {
-					return false
-				}
-			} else if len(command) == 6 {
+			if len(command) == 6 {
 				x, err := strconv.Atoi(command[2])
 				if err != nil {
 					return false
@@ -611,11 +541,7 @@ func commandsRun(commands CommandSlice) bool {
 				return false
 			}
 		case "scrollleft", "scrollright", "scrollup", "scrolldown":
-			if len(command) == 1 && (command[0] == "scrollup" || command[0] == "scrolldown") {
-				if !inputUhidMouseInput(0, 0, 0, command[0][6:]) {
-					return false
-				}
-			} else if len(command) == 5 {
+			if len(command) == 5 {
 				x, err := strconv.Atoi(command[1])
 				if err != nil {
 					return false
@@ -637,54 +563,6 @@ func commandsRun(commands CommandSlice) bool {
 				}
 
 				if !inputSdkInjectScrollEvent(x, y, width, height, command[0][6:]) {
-					return false
-				}
-			} else {
-				return false
-			}
-		case "gamepadinput":
-			if len(command) == 9 {
-				leftX, err := strconv.Atoi(command[1])
-				if err != nil {
-					return false
-				}
-
-				leftY, err := strconv.Atoi(command[2])
-				if err != nil {
-					return false
-				}
-
-				rightX, err := strconv.Atoi(command[3])
-				if err != nil {
-					return false
-				}
-
-				rightY, err := strconv.Atoi(command[4])
-				if err != nil {
-					return false
-				}
-
-				leftTrigger, err := strconv.Atoi(command[5])
-				if err != nil {
-					return false
-				}
-
-				rightTrigger, err := strconv.Atoi(command[6])
-				if err != nil {
-					return false
-				}
-
-				buttons, err := strconv.Atoi(command[7])
-				if err != nil {
-					return false
-				}
-
-				dpad, err := strconv.Atoi(command[8])
-				if err != nil {
-					return false
-				}
-
-				if !inputUhidGamepadInput(leftX, leftY, rightX, rightY, leftTrigger, rightTrigger, buttons, dpad) {
 					return false
 				}
 			} else {
