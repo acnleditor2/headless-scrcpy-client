@@ -198,6 +198,7 @@ var commandHandlerFuncs template.FuncMap = template.FuncMap{
 	"split":     strings.Split,
 	"join":      strings.Join,
 	"match":     regexp.MatchString,
+	"env":       os.Getenv,
 	"run": func(cs CommandSlice, wait bool) bool {
 		if wait {
 			return commandsRun(cs)
@@ -254,11 +255,11 @@ var commandHandlerFuncs template.FuncMap = template.FuncMap{
 		result.Body = string(responseBodyBytes)
 		return
 	},
+	"httpRequestHeader": func(key string, value string) [2]string {
+		return [2]string{key, value}
+	},
 	"command": func(c ...string) CommandSlice {
 		return CommandSlice([][]string{c})
-	},
-	"header": func(key string, value string) [2]string {
-		return [2]string{key, value}
 	},
 }
 
