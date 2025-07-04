@@ -10,7 +10,6 @@
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
 
-static bool raw = false;
 static bool alpha = false;
 static unsigned char *video_packet = NULL;
 static AVCodecParserContext *parser = NULL;
@@ -18,8 +17,6 @@ static AVCodecContext *codec_ctx = NULL;
 static struct SwsContext *sws_ctx = NULL;
 static AVFrame *frame = NULL;
 static AVPacket *packet = NULL;
-static uint32_t initial_width = 0;
-static uint32_t initial_height = 0;
 static uint32_t frame_width = 0;
 static uint32_t frame_height = 0;
 static size_t frame_size = 0;
@@ -101,10 +98,6 @@ static bool init(char **argv) {
   }
 
   if (atoi(argv[2])) {
-    raw = true;
-  }
-
-  if (atoi(argv[3])) {
     alpha = true;
   }
 
@@ -151,9 +144,6 @@ static void decode_loop(void) {
 
             if (frame_data) {
               free(frame_data);
-            } else if (raw) {
-              initial_width = frame_width;
-              initial_height = frame_height;
             }
 
             frame_size = frame_width * frame_height * (alpha ? 4 : 3);
@@ -164,30 +154,24 @@ static void decode_loop(void) {
             }
           }
 
-          if (!raw || (frame->width == initial_width &&
-                       frame->height == initial_height)) {
-            sws_ctx = sws_getCachedContext(
-                sws_ctx, frame_width, frame_height, codec_ctx->pix_fmt,
-                frame_width, frame_height,
-                alpha ? AV_PIX_FMT_RGBA : AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR,
-                NULL, NULL, NULL);
+          sws_ctx = sws_getCachedContext(
+              sws_ctx, frame_width, frame_height, codec_ctx->pix_fmt,
+              frame_width, frame_height,
+              alpha ? AV_PIX_FMT_RGBA : AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR,
+              NULL, NULL, NULL);
 
-            if (!sws_ctx) {
-              return;
-            }
-
-            int stride = (alpha ? 4 : 3) * frame_width;
-
-            sws_scale(sws_ctx, (const uint8_t *const *)frame->data,
-                      frame->linesize, 0, frame_height, &frame_data, &stride);
-
-            if (!raw) {
-              write(STDOUT_FILENO, &frame_width, sizeof(frame_width));
-              write(STDOUT_FILENO, &frame_height, sizeof(frame_height));
-            }
-
-            write(STDOUT_FILENO, frame_data, frame_size);
+          if (!sws_ctx) {
+            return;
           }
+
+          int stride = (alpha ? 4 : 3) * frame_width;
+
+          sws_scale(sws_ctx, (const uint8_t *const *)frame->data,
+                    frame->linesize, 0, frame_height, &frame_data, &stride);
+
+          write(STDOUT_FILENO, &frame_width, sizeof(frame_width));
+          write(STDOUT_FILENO, &frame_height, sizeof(frame_height));
+          write(STDOUT_FILENO, frame_data, frame_size);
 
           av_frame_unref(frame);
           av_packet_unref(packet);
@@ -201,7 +185,7 @@ static void decode_loop(void) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 4) {
+  if (argc != 3) {
     return 0;
   }
 

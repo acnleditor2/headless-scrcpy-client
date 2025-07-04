@@ -145,7 +145,6 @@ type Config struct {
 	VideoDecoder struct {
 		Enabled    bool   `json:"enabled"`
 		Executable string `json:"executable"`
-		Stream     bool   `json:"stream"`
 		Alpha      bool   `json:"alpha"`
 	} `json:"videoDecoder"`
 }
@@ -173,7 +172,6 @@ var initialVideoWidth int
 var initialVideoHeight int
 var scrcpyServer *exec.Cmd
 var scrcpyConnectedCommands CommandSlice
-var videoDecoderIsFfmpeg bool
 var videoFrame []byte
 var videoFrameWidth int
 var videoFrameHeight int
@@ -388,12 +386,6 @@ func endpointHandler(w http.ResponseWriter, req *http.Request) {
 				videoSendStream(w, req, true)
 			case "rawVideoStream":
 				videoSendStream(w, req, false)
-			case "rgbVideoStream":
-				if videoDecoderIsFfmpeg {
-					videoSendFfmpegRgbStream(w, req)
-				} else {
-					videoSendRgbStream(w, req)
-				}
 			case "audioStream":
 				audioSendStream(w, req, true)
 			case "rawAudioStream":
@@ -641,18 +633,16 @@ func main() {
 	if config.Scrcpy.Enabled {
 		scrcpyConnectedCommands = config.Scrcpy.ConnectedCommands
 
-		if config.Scrcpy.Video && config.VideoDecoder.Enabled && !config.VideoDecoder.Stream {
+		if config.Scrcpy.Video && config.VideoDecoder.Enabled {
 			if runtime.GOOS == "windows" {
-				videoDecoderIsFfmpeg = true
-			} else {
-				_, ok := exec.Command(config.VideoDecoder.Executable).Run().(*exec.ExitError)
-				videoDecoderIsFfmpeg = ok
-			}
-
-			if videoDecoderIsFfmpeg {
 				go videoDecodeFfmpeg()
 			} else {
-				go videoDecode()
+				_, ok := exec.Command(config.VideoDecoder.Executable).Run().(*exec.ExitError)
+				if ok {
+					go videoDecodeFfmpeg()
+				} else {
+					go videoDecode()
+				}
 			}
 		}
 
@@ -951,7 +941,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			if endpoint.Response != "" && endpoint.Response != "videoStream" && endpoint.Response != "rawVideoStream" && endpoint.Response != "rgbVideoStream" && endpoint.Response != "audioStream" && endpoint.Response != "rawAudioStream" && endpoint.Response != "clipboardStream" && endpoint.Response != "uhidKeyboardOutputStream" && endpoint.Response != "clipboard" && endpoint.Response != "deviceName" && endpoint.Response != "videoCodec" && endpoint.Response != "audioCodec" && endpoint.Response != "initialVideoWidth" && endpoint.Response != "initialVideoHeight" && endpoint.Response != "videoFrame" && endpoint.Response != "encoders" && endpoint.Response != "displays" && endpoint.Response != "cameras" && endpoint.Response != "cameraSizes" && endpoint.Response != "apps" {
+			if endpoint.Response != "" && endpoint.Response != "videoStream" && endpoint.Response != "rawVideoStream" && endpoint.Response != "audioStream" && endpoint.Response != "rawAudioStream" && endpoint.Response != "clipboardStream" && endpoint.Response != "uhidKeyboardOutputStream" && endpoint.Response != "clipboard" && endpoint.Response != "deviceName" && endpoint.Response != "videoCodec" && endpoint.Response != "audioCodec" && endpoint.Response != "initialVideoWidth" && endpoint.Response != "initialVideoHeight" && endpoint.Response != "videoFrame" && endpoint.Response != "encoders" && endpoint.Response != "displays" && endpoint.Response != "cameras" && endpoint.Response != "cameraSizes" && endpoint.Response != "apps" {
 				os.Exit(1)
 			}
 
