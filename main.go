@@ -37,31 +37,29 @@ func (cs *CommandSlice) UnmarshalJSON(data []byte) error {
 
 		for _, v := range m {
 			if len(v) > 2 && v[0] == '"' && v[len(v)-1] == '"' {
-				commandName := ""
-				err = json.Unmarshal([]byte(v), &commandName)
+				c := ""
+				err = json.Unmarshal([]byte(v), &c)
 				if err != nil {
 					return err
 				}
 
-				*cs = CommandSlice([][]string{{commandName}})
+				*cs = CommandSlice([][]string{{os.Expand(c, func(k string) string { return m[k] })}})
 				break
 			}
 
 			err = json.Unmarshal([]byte(v), &s)
-			if err != nil {
-				return err
+			if err == nil {
+				*cs = CommandSlice(s)
+				break
 			}
-
-			*cs = CommandSlice(s)
-			break
 		}
 
-		return nil
+		return err
 	} else if len(data) > 2 && data[0] == '"' && data[len(data)-1] == '"' {
-		commandName := ""
-		err := json.Unmarshal(data, &commandName)
+		c := ""
+		err := json.Unmarshal(data, &c)
 		if err == nil {
-			*cs = CommandSlice([][]string{{commandName}})
+			*cs = CommandSlice([][]string{{c}})
 		}
 
 		return err
@@ -80,6 +78,14 @@ type Endpoint struct {
 	Response         string       `json:"response"`
 	ClipboardCut     bool         `json:"clipboardCut"`
 	ClipboardTimeout int          `json:"clipboardTimeout"`
+}
+
+type UhidDevice struct {
+	Id         int    `json:"id"`
+	ReportDesc string `json:"reportDesc"`
+	Name       string `json:"name"`
+	VendorId   string `json:"vendorId"`
+	ProductId  string `json:"productId"`
 }
 
 type Config struct {
@@ -113,33 +119,22 @@ type Config struct {
 	} `json:"adb"`
 
 	Scrcpy struct {
-		Enabled                  bool         `json:"enabled"`
-		Port                     int          `json:"port"`
-		Video                    bool         `json:"video"`
-		Audio                    bool         `json:"audio"`
-		Control                  bool         `json:"control"`
-		Forward                  bool         `json:"forward"`
-		UhidKeyboardReportDesc   string       `json:"uhidKeyboardReportDesc"`
-		UhidKeyboardName         string       `json:"uhidKeyboardName"`
-		UhidKeyboardVendorId     string       `json:"uhidKeyboardVendorId"`
-		UhidKeyboardProductId    string       `json:"uhidKeyboardProductId"`
-		UhidMouseReportDesc      string       `json:"uhidMouseReportDesc"`
-		UhidMouseName            string       `json:"uhidMouseName"`
-		UhidMouseVendorId        string       `json:"uhidMouseVendorId"`
-		UhidMouseProductId       string       `json:"uhidMouseProductId"`
-		UhidGamepadReportDesc    string       `json:"uhidGamepadReportDesc"`
-		UhidGamepadName          string       `json:"uhidGamepadName"`
-		UhidGamepadVendorId      string       `json:"uhidGamepadVendorId"`
-		UhidGamepadProductId     string       `json:"uhidGamepadProductId"`
-		StdoutClipboard          bool         `json:"stdoutClipboard"`
-		StdoutUhidKeyboardOutput bool         `json:"stdoutUhidKeyboardOutput"`
-		ConnectedCommands        CommandSlice `json:"connectedCommands"`
-		Server                   string       `json:"server"`
-		ServerVersion            string       `json:"serverVersion"`
-		ServerOptions            []string     `json:"serverOptions"`
-		ClipboardAutosync        bool         `json:"clipboardAutosync"`
-		Cleanup                  bool         `json:"cleanup"`
-		PowerOn                  bool         `json:"powerOn"`
+		Enabled           bool         `json:"enabled"`
+		Port              int          `json:"port"`
+		Video             bool         `json:"video"`
+		Audio             bool         `json:"audio"`
+		Control           bool         `json:"control"`
+		Forward           bool         `json:"forward"`
+		UhidDevices       []UhidDevice `json:"uhidDevices"`
+		StdoutClipboard   bool         `json:"stdoutClipboard"`
+		StdoutUhidOutput  bool         `json:"stdoutUhidOutput"`
+		ConnectedCommands CommandSlice `json:"connectedCommands"`
+		Server            string       `json:"server"`
+		ServerVersion     string       `json:"serverVersion"`
+		ServerOptions     []string     `json:"serverOptions"`
+		ClipboardAutosync bool         `json:"clipboardAutosync"`
+		Cleanup           bool         `json:"cleanup"`
+		PowerOn           bool         `json:"powerOn"`
 	} `json:"scrcpy"`
 
 	VideoDecoder struct {
@@ -164,7 +159,7 @@ var connectionControlChannel chan bool = make(chan bool)
 var videoConnectedChannel chan struct{} = make(chan struct{})
 var audioConnectedChannel chan struct{} = make(chan struct{})
 var clipboardChannel chan string = make(chan string)
-var uhidKeyboardOutputChannel chan string = make(chan string)
+var uhidOutputChannel chan string = make(chan string)
 var deviceName string
 var videoCodec uint32
 var audioCodec uint32
@@ -392,8 +387,8 @@ func endpointHandler(w http.ResponseWriter, req *http.Request) {
 				audioSendStream(w, req, false)
 			case "clipboardStream":
 				clipboardSendStream(w, req)
-			case "uhidKeyboardOutputStream":
-				inputUhidKeyboardSendOutputStream(w, req)
+			case "uhidOutputStream":
+				inputUhidSendOutputStream(w, req)
 			case "clipboard":
 				if controlSocket == nil {
 					w.WriteHeader(http.StatusNotFound)
@@ -786,25 +781,9 @@ func main() {
 					}
 
 					if config.Scrcpy.Control {
-						if config.Scrcpy.UhidKeyboardReportDesc != "" {
-							if !inputUhidCreateDevice(config.Scrcpy.UhidKeyboardReportDesc, 0x01, config.Scrcpy.UhidKeyboardName, config.Scrcpy.UhidKeyboardVendorId, config.Scrcpy.UhidKeyboardProductId, controlSocket) {
-								go func() { connectionControlChannel <- false }()
-								continue
-							}
-						}
-
-						if config.Scrcpy.UhidMouseReportDesc != "" {
-							if !inputUhidCreateDevice(config.Scrcpy.UhidMouseReportDesc, 0x02, config.Scrcpy.UhidMouseName, config.Scrcpy.UhidMouseVendorId, config.Scrcpy.UhidMouseProductId, controlSocket) {
-								go func() { connectionControlChannel <- false }()
-								continue
-							}
-						}
-
-						if config.Scrcpy.UhidGamepadReportDesc != "" {
-							if !inputUhidCreateDevice(config.Scrcpy.UhidGamepadReportDesc, 0x03, config.Scrcpy.UhidGamepadName, config.Scrcpy.UhidGamepadVendorId, config.Scrcpy.UhidGamepadProductId, controlSocket) {
-								go func() { connectionControlChannel <- false }()
-								continue
-							}
+						if !inputUhidCreateDevices() {
+							go func() { connectionControlChannel <- false }()
+							continue
 						}
 
 						go func() {
@@ -886,14 +865,12 @@ func main() {
 										return
 									}
 
-									if int(binary.BigEndian.Uint16(data[1:3])) == 1 {
-										if config.Scrcpy.StdoutUhidKeyboardOutput {
-											fmt.Println(hex.EncodeToString(data[:size]))
-										} else if config.HttpServer.Enabled {
-											select {
-											case uhidKeyboardOutputChannel <- hex.EncodeToString(data[:size]):
-											default:
-											}
+									if config.Scrcpy.StdoutUhidOutput {
+										fmt.Println(hex.EncodeToString(data[:size]))
+									} else if config.HttpServer.Enabled {
+										select {
+										case uhidOutputChannel <- hex.EncodeToString(data[:size]):
+										default:
 										}
 									}
 								}
@@ -941,7 +918,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			if endpoint.Response != "" && endpoint.Response != "videoStream" && endpoint.Response != "rawVideoStream" && endpoint.Response != "audioStream" && endpoint.Response != "rawAudioStream" && endpoint.Response != "clipboardStream" && endpoint.Response != "uhidKeyboardOutputStream" && endpoint.Response != "clipboard" && endpoint.Response != "deviceName" && endpoint.Response != "videoCodec" && endpoint.Response != "audioCodec" && endpoint.Response != "initialVideoWidth" && endpoint.Response != "initialVideoHeight" && endpoint.Response != "videoFrame" && endpoint.Response != "encoders" && endpoint.Response != "displays" && endpoint.Response != "cameras" && endpoint.Response != "cameraSizes" && endpoint.Response != "apps" {
+			if endpoint.Response != "" && endpoint.Response != "videoStream" && endpoint.Response != "rawVideoStream" && endpoint.Response != "audioStream" && endpoint.Response != "rawAudioStream" && endpoint.Response != "clipboardStream" && endpoint.Response != "uhidOutputStream" && endpoint.Response != "clipboard" && endpoint.Response != "deviceName" && endpoint.Response != "videoCodec" && endpoint.Response != "audioCodec" && endpoint.Response != "initialVideoWidth" && endpoint.Response != "initialVideoHeight" && endpoint.Response != "videoFrame" && endpoint.Response != "encoders" && endpoint.Response != "displays" && endpoint.Response != "cameras" && endpoint.Response != "cameraSizes" && endpoint.Response != "apps" {
 				os.Exit(1)
 			}
 

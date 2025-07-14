@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"net"
 	"net/http"
 	"strconv"
 )
@@ -213,48 +212,50 @@ func inputSdkInjectScrollEvent(x int, y int, width int, height int, direction st
 	return true
 }
 
-func inputUhidCreateDevice(reportDescString string, id int, name string, vendorIdString string, productIdString string, controlSocket net.Conn) bool {
-	reportDesc, err := hex.DecodeString(reportDescString)
-	if err != nil {
-		return false
-	}
-
-	var b bytes.Buffer
-
-	b.WriteByte(0x0C)
-	binary.Write(&b, binary.BigEndian, uint16(id))
-	if vendorIdString == "" || productIdString == "" {
-		binary.Write(&b, binary.BigEndian, uint32(0))
-	} else if len(vendorIdString) == 4 && len(productIdString) == 4 {
-		vendorId, err := strconv.ParseUint(vendorIdString, 16, 16)
+func inputUhidCreateDevices() bool {
+	for i := range config.Scrcpy.UhidDevices {
+		reportDesc, err := hex.DecodeString(config.Scrcpy.UhidDevices[i].ReportDesc)
 		if err != nil {
 			return false
 		}
 
-		productId, err := strconv.ParseUint(productIdString, 16, 16)
+		var b bytes.Buffer
+
+		b.WriteByte(0x0C)
+		binary.Write(&b, binary.BigEndian, uint16(config.Scrcpy.UhidDevices[i].Id))
+		if config.Scrcpy.UhidDevices[i].VendorId == "" || config.Scrcpy.UhidDevices[i].ProductId == "" {
+			binary.Write(&b, binary.BigEndian, uint32(0))
+		} else if len(config.Scrcpy.UhidDevices[i].VendorId) == 4 && len(config.Scrcpy.UhidDevices[i].ProductId) == 4 {
+			vendorId, err := strconv.ParseUint(config.Scrcpy.UhidDevices[i].VendorId, 16, 16)
+			if err != nil {
+				return false
+			}
+
+			productId, err := strconv.ParseUint(config.Scrcpy.UhidDevices[i].ProductId, 16, 16)
+			if err != nil {
+				return false
+			}
+
+			binary.Write(&b, binary.BigEndian, uint16(vendorId))
+			binary.Write(&b, binary.BigEndian, uint16(productId))
+		}
+		b.WriteByte(byte(len(config.Scrcpy.UhidDevices[i].Name)))
+		if config.Scrcpy.UhidDevices[i].Name != "" {
+			b.WriteString(config.Scrcpy.UhidDevices[i].Name)
+		}
+		binary.Write(&b, binary.BigEndian, uint16(len(reportDesc)))
+		b.Write(reportDesc)
+
+		_, err = b.WriteTo(controlSocket)
 		if err != nil {
 			return false
 		}
-
-		binary.Write(&b, binary.BigEndian, uint16(vendorId))
-		binary.Write(&b, binary.BigEndian, uint16(productId))
-	}
-	b.WriteByte(byte(len(name)))
-	if name != "" {
-		b.WriteString(name)
-	}
-	binary.Write(&b, binary.BigEndian, uint16(len(reportDesc)))
-	b.Write(reportDesc)
-
-	_, err = b.WriteTo(controlSocket)
-	if err != nil {
-		return false
 	}
 
 	return true
 }
 
-func inputUhidKeyboardInput(dataString string) bool {
+func inputUhidInput(id int, dataString string) bool {
 	data, err := hex.DecodeString(dataString)
 	if err != nil {
 		return false
@@ -266,7 +267,7 @@ func inputUhidKeyboardInput(dataString string) bool {
 	var b bytes.Buffer
 
 	b.WriteByte(0x0D)
-	binary.Write(&b, binary.BigEndian, uint16(0x01))
+	binary.Write(&b, binary.BigEndian, uint16(id))
 	binary.Write(&b, binary.BigEndian, uint16(len(data)))
 	b.Write(data)
 
@@ -278,7 +279,7 @@ func inputUhidKeyboardInput(dataString string) bool {
 	return true
 }
 
-func inputUhidKeyboardSendOutputStream(w http.ResponseWriter, req *http.Request) {
+func inputUhidSendOutputStream(w http.ResponseWriter, req *http.Request) {
 	if !config.Scrcpy.Control {
 		w.WriteHeader(http.StatusNotFound)
 		return
@@ -288,7 +289,7 @@ func inputUhidKeyboardSendOutputStream(w http.ResponseWriter, req *http.Request)
 
 	for {
 		select {
-		case line := <-uhidKeyboardOutputChannel:
+		case line := <-uhidOutputChannel:
 			_, err = fmt.Fprintln(w, line)
 			if err != nil {
 				return
@@ -299,54 +300,6 @@ func inputUhidKeyboardSendOutputStream(w http.ResponseWriter, req *http.Request)
 			return
 		}
 	}
-}
-
-func inputUhidMouseInput(dataString string) bool {
-	data, err := hex.DecodeString(dataString)
-	if err != nil {
-		return false
-	}
-	if len(data) == 0 {
-		return false
-	}
-
-	var b bytes.Buffer
-
-	b.WriteByte(0x0D)
-	binary.Write(&b, binary.BigEndian, uint16(0x02))
-	binary.Write(&b, binary.BigEndian, uint16(len(data)))
-	b.Write(data)
-
-	_, err = b.WriteTo(controlSocket)
-	if err != nil {
-		return false
-	}
-
-	return true
-}
-
-func inputUhidGamepadInput(dataString string) bool {
-	data, err := hex.DecodeString(dataString)
-	if err != nil {
-		return false
-	}
-	if len(data) == 0 {
-		return false
-	}
-
-	var b bytes.Buffer
-
-	b.WriteByte(0x0D)
-	binary.Write(&b, binary.BigEndian, uint16(0x03))
-	binary.Write(&b, binary.BigEndian, uint16(len(data)))
-	b.Write(data)
-
-	_, err = b.WriteTo(controlSocket)
-	if err != nil {
-		return false
-	}
-
-	return true
 }
 
 func inputGetMouseButton(buttonString string) int {

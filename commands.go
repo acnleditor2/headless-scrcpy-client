@@ -158,65 +158,14 @@ func commandsRun(commands CommandSlice) bool {
 			} else {
 				return false
 			}
-		case "createuhiddevices":
-			if len(command) == 4 {
-				if command[1] != "" {
-					if !inputUhidCreateDevice(command[1], 0x01, "", "", "", controlSocket) {
-						return false
-					}
-				}
-
-				if command[2] != "" {
-					if !inputUhidCreateDevice(command[2], 0x02, "", "", "", controlSocket) {
-						return false
-					}
-				}
-
-				if command[3] != "" {
-					if !inputUhidCreateDevice(command[3], 0x03, "", "", "", controlSocket) {
-						return false
-					}
-				}
-			} else if len(command) == 13 {
-				if command[1] != "" {
-					if !inputUhidCreateDevice(command[1], 0x01, command[2], command[3], command[4], controlSocket) {
-						return false
-					}
-				}
-
-				if command[5] != "" {
-					if !inputUhidCreateDevice(command[5], 0x02, command[6], command[7], command[8], controlSocket) {
-						return false
-					}
-				}
-
-				if command[9] != "" {
-					if !inputUhidCreateDevice(command[9], 0x03, command[10], command[11], command[12], controlSocket) {
-						return false
-					}
-				}
-			} else {
-				return false
-			}
-		case "uhidkeyboardinput":
-			if len(command) == 2 {
-				if !inputUhidKeyboardInput(command[1]) {
+		case "uhidinput":
+			if len(command) == 3 {
+				id, err := strconv.Atoi(command[1])
+				if err != nil {
 					return false
 				}
-			} else {
-				return false
-			}
-		case "uhidmouseinput":
-			if len(command) == 2 {
-				if !inputUhidMouseInput(command[1]) {
-					return false
-				}
-			} else {
-				return false
-			}
-		case "uhidgamepadinput":
-			if len(command) == 2 {
-				if !inputUhidGamepadInput(command[1]) {
+
+				if !inputUhidInput(id, command[2]) {
 					return false
 				}
 			} else {
