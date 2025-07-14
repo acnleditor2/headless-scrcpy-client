@@ -142,15 +142,21 @@ static void decode_loop(void) {
             frame_width = frame->width;
             frame_height = frame->height;
 
-            if (frame_data) {
-              free(frame_data);
-            }
+            size_t new_frame_size =
+                frame_width * frame_height * (alpha ? 4 : 3);
 
-            frame_size = frame_width * frame_height * (alpha ? 4 : 3);
-            frame_data = malloc(frame_size);
+            if (frame_size != new_frame_size) {
+              frame_size = new_frame_size;
 
-            if (!frame_data) {
-              return;
+              if (frame_data) {
+                free(frame_data);
+              }
+
+              frame_data = malloc(frame_size);
+
+              if (!frame_data) {
+                return;
+              }
             }
           }
 
