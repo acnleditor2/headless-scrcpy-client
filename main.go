@@ -106,6 +106,170 @@ func (e *HttpEndpoint) UnmarshalJSON(data []byte) error {
 	return err
 }
 
+type UdpServerConfig struct {
+	Enabled         bool     `json:"enabled"`
+	Address         string   `json:"address"`
+	HandlerTemplate []string `json:"handlerTemplate"`
+}
+
+func (c *UdpServerConfig) UnmarshalJSON(data []byte) error {
+	if len(data) > 2 && data[0] == '"' && data[len(data)-1] == '"' {
+		c.Enabled = true
+		return json.Unmarshal(data, &c.Address)
+	}
+
+	type UdpServerC UdpServerConfig
+	var udpServerC UdpServerC
+
+	err := json.Unmarshal(data, &udpServerC)
+	if err == nil {
+		*c = UdpServerConfig(udpServerC)
+	}
+
+	return err
+}
+
+type StdinCommandsConfig struct {
+	Enabled         bool     `json:"enabled"`
+	HandlerTemplate []string `json:"handlerTemplate"`
+}
+
+func (c *StdinCommandsConfig) UnmarshalJSON(data []byte) error {
+	if len(data) > 1 && data[0] == '[' && data[len(data)-1] == ']' {
+		c.Enabled = true
+		return json.Unmarshal(data, &c.HandlerTemplate)
+	}
+
+	type StdinCommandsC StdinCommandsConfig
+	var stdinCommandsC StdinCommandsC
+
+	err := json.Unmarshal(data, &stdinCommandsC)
+	if err == nil {
+		*c = StdinCommandsConfig(stdinCommandsC)
+	}
+
+	return err
+}
+
+type AdbConfig struct {
+	Enabled    bool     `json:"enabled"`
+	Executable string   `json:"executable"`
+	Options    []string `json:"options"`
+	Device     string   `json:"device"`
+}
+
+func (c *AdbConfig) UnmarshalJSON(data []byte) error {
+	if len(data) > 1 && data[0] == '[' && data[len(data)-1] == ']' {
+		c.Enabled = true
+
+		err := json.Unmarshal(data, &c.Options)
+		if err != nil {
+			return err
+		}
+	} else if len(data) > 1 && data[0] == '"' && data[len(data)-1] == '"' {
+		c.Enabled = true
+
+		err := json.Unmarshal(data, &c.Executable)
+		if err != nil {
+			return err
+		}
+	}
+
+	if !c.Enabled {
+		type AdbC AdbConfig
+		var adbC AdbC
+
+		err := json.Unmarshal(data, &adbC)
+		if err == nil {
+			*c = AdbConfig(adbC)
+		} else {
+			return err
+		}
+	}
+
+	if c.Enabled && c.Executable == "" {
+		var err error
+		c.Executable, err = exec.LookPath("adb")
+		return err
+	}
+
+	return nil
+}
+
+type ScrcpyConfig struct {
+	Enabled           bool         `json:"enabled"`
+	Port              int          `json:"port"`
+	Video             bool         `json:"video"`
+	Audio             bool         `json:"audio"`
+	Control           bool         `json:"control"`
+	Forward           bool         `json:"forward"`
+	UhidDevices       []UhidDevice `json:"uhidDevices"`
+	StdoutClipboard   bool         `json:"stdoutClipboard"`
+	StdoutUhidOutput  bool         `json:"stdoutUhidOutput"`
+	ConnectedCommands CommandSlice `json:"connectedCommands"`
+	Server            string       `json:"server"`
+	ServerVersion     string       `json:"serverVersion"`
+	ServerOptions     []string     `json:"serverOptions"`
+	ClipboardAutosync bool         `json:"clipboardAutosync"`
+	Cleanup           bool         `json:"cleanup"`
+	PowerOn           bool         `json:"powerOn"`
+}
+
+func (c *ScrcpyConfig) UnmarshalJSON(data []byte) error {
+	type ScrcpyC ScrcpyConfig
+	var scrcpyC ScrcpyC
+
+	scrcpyC.Port = 27183
+	scrcpyC.Server = "/data/local/tmp/scrcpy-server.jar"
+	scrcpyC.ServerVersion = "3.3.3"
+
+	err := json.Unmarshal(data, &scrcpyC)
+	if err == nil {
+		*c = ScrcpyConfig(scrcpyC)
+	}
+
+	return err
+}
+
+type VideoDecoderConfig struct {
+	Enabled    bool   `json:"enabled"`
+	Executable string `json:"executable"`
+	Alpha      bool   `json:"alpha"`
+}
+
+func (c *VideoDecoderConfig) UnmarshalJSON(data []byte) error {
+	if len(data) > 1 && data[0] == '"' && data[len(data)-1] == '"' {
+		c.Enabled = true
+
+		err := json.Unmarshal(data, &c.Executable)
+		if err != nil {
+			return err
+		}
+	} else if json.Unmarshal(data, &c.Alpha) == nil {
+		c.Enabled = true
+	}
+
+	if !c.Enabled {
+		type VideoDecoderC VideoDecoderConfig
+		var videoDecoderC VideoDecoderC
+
+		err := json.Unmarshal(data, &videoDecoderC)
+		if err == nil {
+			*c = VideoDecoderConfig(videoDecoderC)
+		} else {
+			return err
+		}
+	}
+
+	if c.Enabled && c.Executable == "" {
+		var err error
+		c.Executable, err = exec.LookPath("ffmpeg")
+		return err
+	}
+
+	return nil
+}
+
 type UhidDevice struct {
 	Id         int    `json:"id"`
 	ReportDesc string `json:"reportDesc"`
@@ -126,48 +290,11 @@ type Config struct {
 		Endpoints map[string]HttpEndpoint `json:"endpoints"`
 	} `json:"httpServer"`
 
-	UdpServer struct {
-		Enabled         bool     `json:"enabled"`
-		Address         string   `json:"address"`
-		HandlerTemplate []string `json:"handlerTemplate"`
-	} `json:"udpServer"`
-
-	StdinCommands struct {
-		Enabled         bool     `json:"enabled"`
-		HandlerTemplate []string `json:"handlerTemplate"`
-	} `json:"stdinCommands"`
-
-	Adb struct {
-		Enabled    bool     `json:"enabled"`
-		Executable string   `json:"executable"`
-		Options    []string `json:"options"`
-		Device     string   `json:"device"`
-	} `json:"adb"`
-
-	Scrcpy struct {
-		Enabled           bool         `json:"enabled"`
-		Port              int          `json:"port"`
-		Video             bool         `json:"video"`
-		Audio             bool         `json:"audio"`
-		Control           bool         `json:"control"`
-		Forward           bool         `json:"forward"`
-		UhidDevices       []UhidDevice `json:"uhidDevices"`
-		StdoutClipboard   bool         `json:"stdoutClipboard"`
-		StdoutUhidOutput  bool         `json:"stdoutUhidOutput"`
-		ConnectedCommands CommandSlice `json:"connectedCommands"`
-		Server            string       `json:"server"`
-		ServerVersion     string       `json:"serverVersion"`
-		ServerOptions     []string     `json:"serverOptions"`
-		ClipboardAutosync bool         `json:"clipboardAutosync"`
-		Cleanup           bool         `json:"cleanup"`
-		PowerOn           bool         `json:"powerOn"`
-	} `json:"scrcpy"`
-
-	VideoDecoder struct {
-		Enabled    bool   `json:"enabled"`
-		Executable string `json:"executable"`
-		Alpha      bool   `json:"alpha"`
-	} `json:"videoDecoder"`
+	UdpServer     UdpServerConfig     `json:"udpServer"`
+	StdinCommands StdinCommandsConfig `json:"stdinCommands"`
+	Adb           AdbConfig           `json:"adb"`
+	Scrcpy        ScrcpyConfig        `json:"scrcpy"`
+	VideoDecoder  VideoDecoderConfig  `json:"videoDecoder"`
 }
 
 type CommandHandlerData struct {
