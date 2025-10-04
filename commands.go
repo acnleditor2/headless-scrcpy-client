@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -172,7 +170,7 @@ func commandsRun(commands CommandSlice) bool {
 				return false
 			}
 		case "key", "key2":
-			if len(command) == 2 || len(command) == 5 {
+			if len(command) == 2 {
 				var keycode int
 				var err error
 
@@ -188,68 +186,61 @@ func commandsRun(commands CommandSlice) bool {
 					}
 				}
 
-				if len(command) == 2 {
-					if !inputSdkInjectKeycode(false, keycode, 0, 0) {
-						return false
-					}
+				if !inputSdkInjectKeycode(false, keycode, 0, 0) {
+					return false
+				}
 
-					if !inputSdkInjectKeycode(true, keycode, 0, 0) {
-						return false
-					}
-				} else {
-					up, err := strconv.ParseBool(command[2])
-					if err != nil {
-						return false
-					}
-
-					repeat, err := strconv.Atoi(command[3])
-					if err != nil {
-						return false
-					}
-
-					metaState, err := strconv.Atoi(command[4])
-					if err != nil {
-						return false
-					}
-
-					if !inputSdkInjectKeycode(up, keycode, repeat, metaState) {
-						return false
-					}
+				if !inputSdkInjectKeycode(true, keycode, 0, 0) {
+					return false
 				}
 			} else {
 				return false
 			}
-		case "type", "typebase64", "typebase64url", "typehex":
+		case "key3", "key4":
+			if len(command) == 5 {
+				var keycode int
+				var err error
+
+				if command[0] == "key3" {
+					keycode = keycodeMap[command[1]]
+					if keycode == 0 {
+						return false
+					}
+				} else {
+					keycode, err = strconv.Atoi(command[1])
+					if err != nil {
+						return false
+					}
+				}
+
+				up, err := strconv.ParseBool(command[2])
+				if err != nil {
+					return false
+				}
+
+				repeat, err := strconv.Atoi(command[3])
+				if err != nil {
+					return false
+				}
+
+				metaState, err := strconv.Atoi(command[4])
+				if err != nil {
+					return false
+				}
+
+				if !inputSdkInjectKeycode(up, keycode, repeat, metaState) {
+					return false
+				}
+			} else {
+				return false
+			}
+		case "type":
 			if len(command) == 2 {
 				if command[1] == "" {
 					return false
 				}
 
-				var text string
-
-				if command[0] == "typebase64" {
-					textBytes, err := base64.StdEncoding.DecodeString(command[1])
-					if err != nil {
-						return false
-					}
-					text = string(textBytes)
-				} else if command[0] == "typebase64url" {
-					textBytes, err := base64.URLEncoding.DecodeString(command[1])
-					if err != nil {
-						return false
-					}
-					text = string(textBytes)
-				} else if command[0] == "typehex" {
-					textBytes, err := hex.DecodeString(command[1])
-					if err != nil {
-						return false
-					}
-					text = string(textBytes)
-				} else {
-					text = command[1]
-				}
-
-				if !inputSdkInjectText(text) {
+				if !inputSdkInjectText(command[1]) {
 					return false
 				}
 			} else {
@@ -585,32 +576,8 @@ func commandsRun(commands CommandSlice) bool {
 			} else {
 				return false
 			}
-		case "setclipboard", "setclipboardbase64", "setclipboardbase64url", "setclipboardhex", "setclipboardpaste", "setclipboardpastebase64", "setclipboardpastebase64url", "setclipboardpastehex":
+		case "setclipboard", "setclipboardpaste":
 			if len(command) == 2 || len(command) == 3 || len(command) == 4 {
-				var text string
-
-				if strings.HasSuffix(command[0], "base64") {
-					decoded, err := base64.StdEncoding.DecodeString(command[1])
-					if err != nil {
-						return false
-					}
-					text = string(decoded)
-				} else if strings.HasSuffix(command[0], "base64url") {
-					decoded, err := base64.URLEncoding.DecodeString(command[1])
-					if err != nil {
-						return false
-					}
-					text = string(decoded)
-				} else if strings.HasSuffix(command[0], "hex") {
-					decoded, err := hex.DecodeString(command[1])
-					if err != nil {
-						return false
-					}
-					text = string(decoded)
-				} else {
-					text = command[1]
-				}
-
 				var sequenceString string
 				var timeout time.Duration
 				var err error
@@ -618,7 +585,7 @@ func commandsRun(commands CommandSlice) bool {
 				if len(command) > 2 {
 					sequenceString = command[2]
 
-					if len(command) == 4 {
+					if len(command) == 4 && command[3] != "" {
 						timeout, err = time.ParseDuration(command[3])
 						if err != nil {
 							return false
@@ -626,7 +593,7 @@ func commandsRun(commands CommandSlice) bool {
 					}
 				}
 
-				if !clipboardSet(text, sequenceString, strings.HasPrefix(command[0], "setclipboardpaste"), timeout) {
+				if !clipboardSet(command[1], sequenceString, command[0] == "setclipboardpaste", timeout) {
 					return false
 				}
 			} else {

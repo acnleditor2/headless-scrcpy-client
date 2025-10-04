@@ -27,7 +27,7 @@ type CommandSlice [][]string
 func (cs *CommandSlice) UnmarshalJSON(data []byte) error {
 	var s [][]string
 
-	if len(data) > 1 && data[0] == '{' && data[len(data)-1] == '}' {
+	if len(data) > 2 && data[0] == '{' && data[len(data)-1] == '}' {
 		var m map[string]string
 
 		err := json.Unmarshal(data, &m)
@@ -73,11 +73,37 @@ func (cs *CommandSlice) UnmarshalJSON(data []byte) error {
 	return err
 }
 
-type Endpoint struct {
+type HttpEndpoint struct {
 	Commands         CommandSlice `json:"commands"`
 	Response         string       `json:"response"`
 	ClipboardCut     bool         `json:"clipboardCut"`
 	ClipboardTimeout int          `json:"clipboardTimeout"`
+}
+
+func (e *HttpEndpoint) UnmarshalJSON(data []byte) error {
+	if len(data) > 1 && data[0] == '"' && data[len(data)-1] == '"' {
+		s := ""
+		err := json.Unmarshal(data, &s)
+		if err == nil && s != "" {
+			var ok bool
+			*e, ok = defaultHttpEndpoints[s]
+			if !ok {
+				e.Commands = CommandSlice([][]string{{s}})
+			}
+		}
+
+		return err
+	}
+
+	type Endpoint HttpEndpoint
+	var endpoint Endpoint
+
+	err := json.Unmarshal(data, &endpoint)
+	if err == nil {
+		*e = HttpEndpoint(endpoint)
+	}
+
+	return err
 }
 
 type UhidDevice struct {
@@ -92,12 +118,12 @@ type Config struct {
 	CustomCommands map[string]CommandSlice `json:"customCommands"`
 
 	HttpServer struct {
-		Enabled   bool                `json:"enabled"`
-		Address   string              `json:"address"`
-		Static    string              `json:"static"`
-		Cert      string              `json:"cert"`
-		Key       string              `json:"key"`
-		Endpoints map[string]Endpoint `json:"endpoints"`
+		Enabled   bool                    `json:"enabled"`
+		Address   string                  `json:"address"`
+		Static    string                  `json:"static"`
+		Cert      string                  `json:"cert"`
+		Key       string                  `json:"key"`
+		Endpoints map[string]HttpEndpoint `json:"endpoints"`
 	} `json:"httpServer"`
 
 	UdpServer struct {
@@ -331,11 +357,10 @@ func readDeviceMeta() bool {
 	}
 
 	deviceName = string(data[:bytes.IndexByte(data, 0)])
-
 	return true
 }
 
-func endpointHandler(w http.ResponseWriter, req *http.Request) {
+func httpHandler(w http.ResponseWriter, req *http.Request) {
 	origin := req.Header.Get("Origin")
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -363,19 +388,7 @@ func endpointHandler(w http.ResponseWriter, req *http.Request) {
 
 		endpoint := config.HttpServer.Endpoints[req.URL.Path]
 
-		if len(endpoint.Commands) > 0 {
-			query := req.URL.Query()
-			commands := make(CommandSlice, len(endpoint.Commands))
-			for i := range endpoint.Commands {
-				commands[i] = make([]string, len(endpoint.Commands[i]))
-				for j := range endpoint.Commands[i] {
-					commands[i][j] = os.Expand(endpoint.Commands[i][j], query.Get)
-				}
-			}
-
-			go commandsRun(commands)
-			w.WriteHeader(http.StatusNoContent)
-		} else {
+		if endpoint.Response != "" {
 			switch endpoint.Response {
 			case "videoStream":
 				videoSendStream(w, req, true)
@@ -457,6 +470,26 @@ func endpointHandler(w http.ResponseWriter, req *http.Request) {
 					w.Write([]byte(output))
 				}
 			}
+		} else {
+			if len(endpoint.Commands) == 0 {
+				var ok bool
+				endpoint, ok = defaultHttpEndpoints[req.URL.Path[1:]]
+				if !ok {
+					endpoint.Commands = CommandSlice([][]string{{req.URL.Path[1:]}})
+				}
+			}
+
+			query := req.URL.Query()
+			commands := make(CommandSlice, len(endpoint.Commands))
+			for i := range endpoint.Commands {
+				commands[i] = make([]string, len(endpoint.Commands[i]))
+				for j := range endpoint.Commands[i] {
+					commands[i][j] = os.Expand(endpoint.Commands[i][j], query.Get)
+				}
+			}
+
+			go commandsRun(commands)
+			w.WriteHeader(http.StatusNoContent)
 		}
 	default:
 		if origin != "" {
@@ -926,8 +959,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			http.HandleFunc(endpointPath,
-				endpointHandler)
+			http.HandleFunc(endpointPath, httpHandler)
 		}
 
 		if config.HttpServer.Static != "" {
