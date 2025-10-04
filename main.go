@@ -106,6 +106,31 @@ func (e *HttpEndpoint) UnmarshalJSON(data []byte) error {
 	return err
 }
 
+type HttpServerConfig struct {
+	Enabled   bool                    `json:"enabled"`
+	Address   string                  `json:"address"`
+	Static    string                  `json:"static"`
+	Cert      string                  `json:"cert"`
+	Key       string                  `json:"key"`
+	Endpoints map[string]HttpEndpoint `json:"endpoints"`
+}
+
+func (c *HttpServerConfig) UnmarshalJSON(data []byte) error {
+	type HttpServerC HttpServerConfig
+
+	httpServerC := HttpServerC{
+		Enabled: true,
+		Address: "127.0.0.1:27199",
+	}
+
+	err := json.Unmarshal(data, &httpServerC)
+	if err == nil {
+		*c = HttpServerConfig(httpServerC)
+	}
+
+	return err
+}
+
 type UdpServerConfig struct {
 	Enabled         bool     `json:"enabled"`
 	Address         string   `json:"address"`
@@ -119,7 +144,7 @@ func (c *UdpServerConfig) UnmarshalJSON(data []byte) error {
 	}
 
 	type UdpServerC UdpServerConfig
-	var udpServerC UdpServerC
+	udpServerC := UdpServerC{Enabled: true}
 
 	err := json.Unmarshal(data, &udpServerC)
 	if err == nil {
@@ -141,7 +166,7 @@ func (c *StdinCommandsConfig) UnmarshalJSON(data []byte) error {
 	}
 
 	type StdinCommandsC StdinCommandsConfig
-	var stdinCommandsC StdinCommandsC
+	stdinCommandsC := StdinCommandsC{Enabled: true}
 
 	err := json.Unmarshal(data, &stdinCommandsC)
 	if err == nil {
@@ -177,7 +202,7 @@ func (c *AdbConfig) UnmarshalJSON(data []byte) error {
 
 	if !c.Enabled {
 		type AdbC AdbConfig
-		var adbC AdbC
+		adbC := AdbC{Enabled: true}
 
 		err := json.Unmarshal(data, &adbC)
 		if err == nil {
@@ -187,7 +212,7 @@ func (c *AdbConfig) UnmarshalJSON(data []byte) error {
 		}
 	}
 
-	if c.Enabled && c.Executable == "" {
+	if c.Executable == "" {
 		var err error
 		c.Executable, err = exec.LookPath("adb")
 		return err
@@ -217,11 +242,13 @@ type ScrcpyConfig struct {
 
 func (c *ScrcpyConfig) UnmarshalJSON(data []byte) error {
 	type ScrcpyC ScrcpyConfig
-	var scrcpyC ScrcpyC
 
-	scrcpyC.Port = 27183
-	scrcpyC.Server = "/data/local/tmp/scrcpy-server.jar"
-	scrcpyC.ServerVersion = "3.3.3"
+	scrcpyC := ScrcpyC{
+		Enabled:       true,
+		Port:          27183,
+		Server:        "/data/local/tmp/scrcpy-server.jar",
+		ServerVersion: "3.3.3",
+	}
 
 	err := json.Unmarshal(data, &scrcpyC)
 	if err == nil {
@@ -251,7 +278,7 @@ func (c *VideoDecoderConfig) UnmarshalJSON(data []byte) error {
 
 	if !c.Enabled {
 		type VideoDecoderC VideoDecoderConfig
-		var videoDecoderC VideoDecoderC
+		videoDecoderC := VideoDecoderC{Enabled: true}
 
 		err := json.Unmarshal(data, &videoDecoderC)
 		if err == nil {
@@ -261,7 +288,7 @@ func (c *VideoDecoderConfig) UnmarshalJSON(data []byte) error {
 		}
 	}
 
-	if c.Enabled && c.Executable == "" {
+	if c.Executable == "" {
 		var err error
 		c.Executable, err = exec.LookPath("ffmpeg")
 		return err
@@ -280,21 +307,12 @@ type UhidDevice struct {
 
 type Config struct {
 	CustomCommands map[string]CommandSlice `json:"customCommands"`
-
-	HttpServer struct {
-		Enabled   bool                    `json:"enabled"`
-		Address   string                  `json:"address"`
-		Static    string                  `json:"static"`
-		Cert      string                  `json:"cert"`
-		Key       string                  `json:"key"`
-		Endpoints map[string]HttpEndpoint `json:"endpoints"`
-	} `json:"httpServer"`
-
-	UdpServer     UdpServerConfig     `json:"udpServer"`
-	StdinCommands StdinCommandsConfig `json:"stdinCommands"`
-	Adb           AdbConfig           `json:"adb"`
-	Scrcpy        ScrcpyConfig        `json:"scrcpy"`
-	VideoDecoder  VideoDecoderConfig  `json:"videoDecoder"`
+	HttpServer     HttpServerConfig        `json:"httpServer"`
+	UdpServer      UdpServerConfig         `json:"udpServer"`
+	StdinCommands  StdinCommandsConfig     `json:"stdinCommands"`
+	Adb            AdbConfig               `json:"adb"`
+	Scrcpy         ScrcpyConfig            `json:"scrcpy"`
+	VideoDecoder   VideoDecoderConfig      `json:"videoDecoder"`
 }
 
 type CommandHandlerData struct {
