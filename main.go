@@ -363,6 +363,7 @@ var commandHandlerFuncs template.FuncMap = template.FuncMap{
 	"join":      strings.Join,
 	"match":     regexp.MatchString,
 	"env":       os.Getenv,
+	"pid":       os.Getpid,
 	"run": func(cs CommandSlice, wait bool) bool {
 		if wait {
 			return commandsRun(cs)
