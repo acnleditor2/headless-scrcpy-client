@@ -134,9 +134,9 @@ func (e *HttpEndpoint) UnmarshalJSON(data []byte) error {
 		s := ""
 		err := json.Unmarshal(data, &s)
 		if err == nil && s != "" {
-			var ok bool
-			*e, ok = defaultHttpEndpoints["/"+s]
-			if !ok {
+			*e = defaultHttpEndpoints["/"+s]
+
+			if e.Response == "" && len(e.Commands) == 0 {
 				e.Commands = CommandSlice([][]string{{s}})
 			}
 		}
