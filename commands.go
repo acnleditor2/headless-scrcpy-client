@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -60,17 +61,6 @@ func commandsRun(commands CommandSlice) bool {
 		case "startscrcpyserver":
 			if !config.Adb.Enabled || !config.Scrcpy.Enabled {
 				return false
-			}
-
-			if scrcpyServer != nil {
-				select {
-				case connectionControlChannel <- false:
-					time.Sleep(1 * time.Second)
-				default:
-				}
-
-				scrcpyServer.Process.Kill()
-				scrcpyServer.Wait()
 			}
 
 			var args []string
@@ -127,7 +117,27 @@ func commandsRun(commands CommandSlice) bool {
 			}
 
 			if len(command) > 1 {
-				args = append(args, command[1:]...)
+				if len(command) == 2 && strings.HasPrefix(command[1], "[") {
+					var options []string
+					if json.Unmarshal([]byte(command[1]), &options) != nil {
+						return false
+					}
+
+					args = append(args, options...)
+				} else {
+					args = append(args, command[1:]...)
+				}
+			}
+
+			if scrcpyServer != nil {
+				select {
+				case connectionControlChannel <- false:
+					time.Sleep(1 * time.Second)
+				default:
+				}
+
+				scrcpyServer.Process.Kill()
+				scrcpyServer.Wait()
 			}
 
 			scrcpyServer = exec.Command(config.Adb.Executable, args...)

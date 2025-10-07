@@ -39,12 +39,11 @@ func (cs *CommandSlice) UnmarshalJSON(data []byte) error {
 			if len(v) > 2 && v[0] == '"' && v[len(v)-1] == '"' {
 				c := ""
 				err = json.Unmarshal([]byte(v), &c)
-				if err != nil {
-					return err
+				if err == nil {
+					*cs = CommandSlice([][]string{{os.Expand(c, func(k string) string { return m[k] })}})
 				}
 
-				*cs = CommandSlice([][]string{{os.Expand(c, func(k string) string { return m[k] })}})
-				break
+				return err
 			}
 
 			err = json.Unmarshal([]byte(v), &s)
@@ -73,6 +72,56 @@ func (cs *CommandSlice) UnmarshalJSON(data []byte) error {
 	return err
 }
 
+type JsonCommandHandlerTemplate string
+
+func (t *JsonCommandHandlerTemplate) UnmarshalJSON(data []byte) error {
+	if len(data) > 2 && data[0] == '"' && data[len(data)-1] == '"' {
+		s := ""
+		err := json.Unmarshal(data, &s)
+		if err != nil {
+			return err
+		}
+
+		if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
+			resp, err := http.Get(s)
+			if err != nil {
+				return err
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				resp.Body.Close()
+				return fmt.Errorf("%s returned %s", s, resp.Status)
+			}
+
+			bodyBytes, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				return err
+			}
+
+			*t = JsonCommandHandlerTemplate(bodyBytes)
+		} else {
+			b, err := os.ReadFile(s)
+			if err != nil {
+				return err
+			}
+
+			*t = JsonCommandHandlerTemplate(b)
+		}
+
+		return nil
+	}
+
+	var code []string
+
+	err := json.Unmarshal(data, &code)
+	if err == nil {
+		*t = JsonCommandHandlerTemplate(strings.Join(code, "\n"))
+	}
+
+	return err
+}
+
 type HttpEndpoint struct {
 	Commands         CommandSlice `json:"commands"`
 	Response         string       `json:"response"`
@@ -86,7 +135,7 @@ func (e *HttpEndpoint) UnmarshalJSON(data []byte) error {
 		err := json.Unmarshal(data, &s)
 		if err == nil && s != "" {
 			var ok bool
-			*e, ok = defaultHttpEndpoints[s]
+			*e, ok = defaultHttpEndpoints["/"+s]
 			if !ok {
 				e.Commands = CommandSlice([][]string{{s}})
 			}
@@ -126,15 +175,19 @@ func (c *HttpServerConfig) UnmarshalJSON(data []byte) error {
 	err := json.Unmarshal(data, &httpServerC)
 	if err == nil {
 		*c = HttpServerConfig(httpServerC)
+
+		if c.Endpoints != nil && len(c.Endpoints) == 0 {
+			c.Endpoints = defaultHttpEndpoints
+		}
 	}
 
 	return err
 }
 
 type UdpServerConfig struct {
-	Enabled         bool     `json:"enabled"`
-	Address         string   `json:"address"`
-	HandlerTemplate []string `json:"handlerTemplate"`
+	Enabled         bool                       `json:"enabled"`
+	Address         string                     `json:"address"`
+	HandlerTemplate JsonCommandHandlerTemplate `json:"handlerTemplate"`
 }
 
 func (c *UdpServerConfig) UnmarshalJSON(data []byte) error {
@@ -155,8 +208,8 @@ func (c *UdpServerConfig) UnmarshalJSON(data []byte) error {
 }
 
 type StdinCommandsConfig struct {
-	Enabled         bool     `json:"enabled"`
-	HandlerTemplate []string `json:"handlerTemplate"`
+	Enabled         bool                       `json:"enabled"`
+	HandlerTemplate JsonCommandHandlerTemplate `json:"handlerTemplate"`
 }
 
 func (c *StdinCommandsConfig) UnmarshalJSON(data []byte) error {
@@ -205,11 +258,11 @@ func (c *AdbConfig) UnmarshalJSON(data []byte) error {
 		adbC := AdbC{Enabled: true}
 
 		err := json.Unmarshal(data, &adbC)
-		if err == nil {
-			*c = AdbConfig(adbC)
-		} else {
+		if err != nil {
 			return err
 		}
+
+		*c = AdbConfig(adbC)
 	}
 
 	if c.Executable == "" {
@@ -281,11 +334,11 @@ func (c *VideoDecoderConfig) UnmarshalJSON(data []byte) error {
 		videoDecoderC := VideoDecoderC{Enabled: true}
 
 		err := json.Unmarshal(data, &videoDecoderC)
-		if err == nil {
-			*c = VideoDecoderConfig(videoDecoderC)
-		} else {
+		if err != nil {
 			return err
 		}
+
+		*c = VideoDecoderConfig(videoDecoderC)
 	}
 
 	if c.Executable == "" {
@@ -315,7 +368,7 @@ type Config struct {
 	VideoDecoder   VideoDecoderConfig      `json:"videoDecoder"`
 }
 
-type CommandHandlerData struct {
+type JsonCommandHandlerData struct {
 	From     string       `json:"from"`
 	Commands CommandSlice `json:"commands"`
 }
@@ -342,10 +395,10 @@ var videoFrame []byte
 var videoFrameWidth int
 var videoFrameHeight int
 var videoFrameMutex sync.RWMutex
-var udpServerHandlerChannel chan *CommandHandlerData = make(chan *CommandHandlerData)
-var stdinCommandHandlerChannel chan *CommandHandlerData = make(chan *CommandHandlerData)
+var udpServerHandlerChannel chan *JsonCommandHandlerData = make(chan *JsonCommandHandlerData)
+var stdinCommandHandlerChannel chan *JsonCommandHandlerData = make(chan *JsonCommandHandlerData)
 
-var commandHandlerFuncs template.FuncMap = template.FuncMap{
+var jsonCommandHandlerFuncs template.FuncMap = template.FuncMap{
 	"atoi": func(s string) []int {
 		i, err := strconv.Atoi(s)
 		if err != nil {
@@ -618,9 +671,9 @@ func httpHandler(w http.ResponseWriter, req *http.Request) {
 			}
 		} else {
 			if len(endpoint.Commands) == 0 {
-				var ok bool
-				endpoint, ok = defaultHttpEndpoints[req.URL.Path[1:]]
-				if !ok {
+				endpoint = defaultHttpEndpoints[req.URL.Path]
+
+				if len(endpoint.Commands) == 0 {
 					endpoint.Commands = CommandSlice([][]string{{req.URL.Path[1:]}})
 				}
 			}
@@ -659,20 +712,23 @@ func main() {
 		stdinDecoder = json.NewDecoder(os.Stdin)
 		err = stdinDecoder.Decode(&config)
 	} else if strings.HasPrefix(os.Args[1], "http://") || strings.HasPrefix(os.Args[1], "https://") {
-		resp, err := http.Get(os.Args[1])
+		var resp *http.Response
+		resp, err = http.Get(os.Args[1])
 		if err != nil {
 			panic(err)
 		}
 
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
+			fmt.Fprintln(os.Stderr, os.Args[1], "returned", resp.Status)
 			os.Exit(1)
 		}
 
 		err = json.NewDecoder(resp.Body).Decode(&config)
 		resp.Body.Close()
 	} else {
-		configFile, err := os.Open(os.Args[1])
+		var configFile *os.File
+		configFile, err = os.Open(os.Args[1])
 		if err != nil {
 			panic(err)
 		}
@@ -705,7 +761,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if config.HttpServer.Enabled && (config.HttpServer.Address == "" || len(config.HttpServer.Endpoints) == 0) {
+	if config.HttpServer.Enabled && config.HttpServer.Address == "" {
 		os.Exit(1)
 	}
 
@@ -714,41 +770,8 @@ func main() {
 			os.Exit(1)
 		}
 
-		if len(config.UdpServer.HandlerTemplate) > 0 {
-			if config.UdpServer.HandlerTemplate[0] == "" {
-				os.Exit(1)
-			}
-
-			var t *template.Template
-
-			if strings.HasPrefix(config.UdpServer.HandlerTemplate[0], "http://") || strings.HasPrefix(config.UdpServer.HandlerTemplate[0], "https://") {
-				resp, err := http.Get(config.UdpServer.HandlerTemplate[0])
-				if err != nil {
-					panic(err)
-				}
-
-				if resp.StatusCode != http.StatusOK {
-					resp.Body.Close()
-					os.Exit(1)
-				}
-
-				bodyBytes, err := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				if err != nil {
-					panic(err)
-				}
-
-				t = template.Must(template.New("").Funcs(commandHandlerFuncs).Parse(string(bodyBytes)))
-			} else if config.UdpServer.HandlerTemplate[0][0] == ' ' {
-				b, err := os.ReadFile(config.UdpServer.HandlerTemplate[0][1:])
-				if err != nil {
-					panic(err)
-				}
-
-				t = template.Must(template.New("").Funcs(commandHandlerFuncs).Parse(string(b)))
-			} else {
-				t = template.Must(template.New("").Funcs(commandHandlerFuncs).Parse(strings.Join(config.UdpServer.HandlerTemplate, "\n")))
-			}
+		if config.UdpServer.HandlerTemplate != "" {
+			t := template.Must(template.New("").Funcs(jsonCommandHandlerFuncs).Parse(string(config.UdpServer.HandlerTemplate)))
 
 			go func() {
 				err := t.Execute(io.Discard, udpServerHandlerChannel)
@@ -760,41 +783,8 @@ func main() {
 
 	}
 
-	if config.StdinCommands.Enabled && len(config.StdinCommands.HandlerTemplate) > 0 {
-		if config.StdinCommands.HandlerTemplate[0] == "" {
-			os.Exit(1)
-		}
-
-		var t *template.Template
-
-		if strings.HasPrefix(config.StdinCommands.HandlerTemplate[0], "http://") || strings.HasPrefix(config.StdinCommands.HandlerTemplate[0], "https://") {
-			resp, err := http.Get(config.StdinCommands.HandlerTemplate[0])
-			if err != nil {
-				panic(err)
-			}
-
-			if resp.StatusCode != http.StatusOK {
-				resp.Body.Close()
-				os.Exit(1)
-			}
-
-			bodyBytes, err := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if err != nil {
-				panic(err)
-			}
-
-			t = template.Must(template.New("").Funcs(commandHandlerFuncs).Parse(string(bodyBytes)))
-		} else if config.StdinCommands.HandlerTemplate[0][0] == ' ' {
-			b, err := os.ReadFile(config.StdinCommands.HandlerTemplate[0][1:])
-			if err != nil {
-				panic(err)
-			}
-
-			t = template.Must(template.New("").Funcs(commandHandlerFuncs).Parse(string(b)))
-		} else {
-			t = template.Must(template.New("").Funcs(commandHandlerFuncs).Parse(strings.Join(config.StdinCommands.HandlerTemplate, "\n")))
-		}
+	if config.StdinCommands.Enabled && config.StdinCommands.HandlerTemplate != "" {
+		t := template.Must(template.New("").Funcs(jsonCommandHandlerFuncs).Parse(string(config.StdinCommands.HandlerTemplate)))
 
 		go func() {
 			err := t.Execute(io.Discard, stdinCommandHandlerChannel)
@@ -1141,7 +1131,7 @@ func main() {
 					if len(config.UdpServer.HandlerTemplate) == 0 {
 						go commandsRun(cs)
 					} else {
-						udpServerHandlerChannel <- &CommandHandlerData{
+						udpServerHandlerChannel <- &JsonCommandHandlerData{
 							From:     addr.String(),
 							Commands: cs,
 						}
@@ -1173,7 +1163,7 @@ func main() {
 					if len(config.StdinCommands.HandlerTemplate) == 0 {
 						commandsRun(cs)
 					} else {
-						stdinCommandHandlerChannel <- &CommandHandlerData{
+						stdinCommandHandlerChannel <- &JsonCommandHandlerData{
 							From:     "stdin",
 							Commands: cs,
 						}
