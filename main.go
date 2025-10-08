@@ -213,7 +213,7 @@ type StdinCommandsConfig struct {
 }
 
 func (c *StdinCommandsConfig) UnmarshalJSON(data []byte) error {
-	if len(data) > 1 && data[0] == '[' && data[len(data)-1] == ']' {
+	if len(data) > 1 && ((data[0] == '[' && data[len(data)-1] == ']') || (data[0] == '"' && data[len(data)-1] == '"')) {
 		c.Enabled = true
 		return json.Unmarshal(data, &c.HandlerTemplate)
 	}
