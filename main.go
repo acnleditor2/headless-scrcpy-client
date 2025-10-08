@@ -607,7 +607,27 @@ func httpHandler(w http.ResponseWriter, req *http.Request) {
 
 		endpoint := config.HttpServer.Endpoints[req.URL.Path]
 
-		if endpoint.Response != "" {
+		if endpoint.Response == "" && len(endpoint.Commands) == 0 {
+			endpoint = defaultHttpEndpoints[req.URL.Path]
+
+			if endpoint.Response == "" && len(endpoint.Commands) == 0 {
+				endpoint.Commands = CommandSlice([][]string{{req.URL.Path[1:]}})
+			}
+		}
+
+		if endpoint.Response == "" {
+			query := req.URL.Query()
+			commands := make(CommandSlice, len(endpoint.Commands))
+			for i := range endpoint.Commands {
+				commands[i] = make([]string, len(endpoint.Commands[i]))
+				for j := range endpoint.Commands[i] {
+					commands[i][j] = os.Expand(endpoint.Commands[i][j], query.Get)
+				}
+			}
+
+			go commandsRun(commands)
+			w.WriteHeader(http.StatusNoContent)
+		} else {
 			switch endpoint.Response {
 			case "videoStream":
 				videoSendStream(w, req, true)
@@ -689,26 +709,6 @@ func httpHandler(w http.ResponseWriter, req *http.Request) {
 					w.Write([]byte(output))
 				}
 			}
-		} else {
-			if len(endpoint.Commands) == 0 {
-				endpoint = defaultHttpEndpoints[req.URL.Path]
-
-				if len(endpoint.Commands) == 0 {
-					endpoint.Commands = CommandSlice([][]string{{req.URL.Path[1:]}})
-				}
-			}
-
-			query := req.URL.Query()
-			commands := make(CommandSlice, len(endpoint.Commands))
-			for i := range endpoint.Commands {
-				commands[i] = make([]string, len(endpoint.Commands[i]))
-				for j := range endpoint.Commands[i] {
-					commands[i][j] = os.Expand(endpoint.Commands[i][j], query.Get)
-				}
-			}
-
-			go commandsRun(commands)
-			w.WriteHeader(http.StatusNoContent)
 		}
 	default:
 		if origin != "" {
