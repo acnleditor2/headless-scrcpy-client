@@ -165,6 +165,26 @@ type HttpServerConfig struct {
 }
 
 func (c *HttpServerConfig) UnmarshalJSON(data []byte) error {
+	{
+		var wdStatic bool
+		if json.Unmarshal(data, &wdStatic) == nil {
+			c.Enabled = true
+			c.Address = "127.0.0.1:27199"
+			c.Endpoints = defaultHttpEndpoints
+
+			if wdStatic {
+				wd, err := os.Getwd()
+				if err != nil {
+					return err
+				}
+
+				c.Static = wd
+			}
+
+			return nil
+		}
+	}
+
 	type HttpServerC HttpServerConfig
 
 	httpServerC := HttpServerC{
