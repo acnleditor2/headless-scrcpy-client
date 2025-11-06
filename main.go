@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
@@ -15,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -169,46 +167,69 @@ func (c *HttpServerConfig) UnmarshalJSON(data []byte) error {
 	return err
 }
 
-type UdpServerConfig struct {
+type TcpJsonCommandsConfig struct {
 	Enabled         bool   `json:"enabled"`
 	Address         string `json:"address"`
 	HandlerTemplate string `json:"handlerTemplate"`
 }
 
-func (c *UdpServerConfig) UnmarshalJSON(data []byte) error {
+func (c *TcpJsonCommandsConfig) UnmarshalJSON(data []byte) error {
 	if len(data) > 2 && data[0] == '"' && data[len(data)-1] == '"' {
 		c.Enabled = true
 		return json.Unmarshal(data, &c.Address)
 	}
 
-	type UdpServerC UdpServerConfig
-	udpServerC := UdpServerC{Enabled: true}
+	type TcpJsonCommandsC TcpJsonCommandsConfig
+	tcpJsonCommandsC := TcpJsonCommandsC{Enabled: true}
 
-	err := json.Unmarshal(data, &udpServerC)
+	err := json.Unmarshal(data, &tcpJsonCommandsC)
 	if err == nil {
-		*c = UdpServerConfig(udpServerC)
+		*c = TcpJsonCommandsConfig(tcpJsonCommandsC)
 	}
 
 	return err
 }
 
-type StdinCommandsConfig struct {
+type UdpJsonCommandsConfig struct {
+	Enabled         bool   `json:"enabled"`
+	Address         string `json:"address"`
+	HandlerTemplate string `json:"handlerTemplate"`
+}
+
+func (c *UdpJsonCommandsConfig) UnmarshalJSON(data []byte) error {
+	if len(data) > 2 && data[0] == '"' && data[len(data)-1] == '"' {
+		c.Enabled = true
+		return json.Unmarshal(data, &c.Address)
+	}
+
+	type UdpJsonCommandsC UdpJsonCommandsConfig
+	udpJsonCommandsC := UdpJsonCommandsC{Enabled: true}
+
+	err := json.Unmarshal(data, &udpJsonCommandsC)
+	if err == nil {
+		*c = UdpJsonCommandsConfig(udpJsonCommandsC)
+	}
+
+	return err
+}
+
+type StdinJsonCommandsConfig struct {
 	Enabled         bool   `json:"enabled"`
 	HandlerTemplate string `json:"handlerTemplate"`
 }
 
-func (c *StdinCommandsConfig) UnmarshalJSON(data []byte) error {
+func (c *StdinJsonCommandsConfig) UnmarshalJSON(data []byte) error {
 	if len(data) > 1 && data[0] == '"' && data[len(data)-1] == '"' {
 		c.Enabled = true
 		return json.Unmarshal(data, &c.HandlerTemplate)
 	}
 
-	type StdinCommandsC StdinCommandsConfig
-	stdinCommandsC := StdinCommandsC{Enabled: true}
+	type StdinJsonCommandsC StdinJsonCommandsConfig
+	stdinJsonCommandsC := StdinJsonCommandsC{Enabled: true}
 
-	err := json.Unmarshal(data, &stdinCommandsC)
+	err := json.Unmarshal(data, &stdinJsonCommandsC)
 	if err == nil {
-		*c = StdinCommandsConfig(stdinCommandsC)
+		*c = StdinJsonCommandsConfig(stdinJsonCommandsC)
 	}
 
 	return err
@@ -347,8 +368,9 @@ type Config struct {
 	CustomCommands              map[string]CommandSlice               `json:"customCommands"`
 	JsonCommandHandlerTemplates map[string]JsonCommandHandlerTemplate `json:"jsonCommandHandlerTemplates"`
 	HttpServer                  HttpServerConfig                      `json:"httpServer"`
-	UdpServer                   UdpServerConfig                       `json:"udpServer"`
-	StdinCommands               StdinCommandsConfig                   `json:"stdinCommands"`
+	TcpJsonCommands             TcpJsonCommandsConfig                 `json:"tcpJsonCommands"`
+	UdpJsonCommands             UdpJsonCommandsConfig                 `json:"udpJsonCommands"`
+	StdinJsonCommands           StdinJsonCommandsConfig               `json:"stdinJsonCommands"`
 	Adb                         AdbConfig                             `json:"adb"`
 	Scrcpy                      ScrcpyConfig                          `json:"scrcpy"`
 	VideoDecoder                VideoDecoderConfig                    `json:"videoDecoder"`
@@ -361,7 +383,7 @@ type JsonCommandHandlerData struct {
 
 var stdinDecoder *json.Decoder
 var config Config
-var listener net.Listener
+var scrcpyListener net.Listener
 var videoSocket net.Conn
 var audioSocket net.Conn
 var controlSocket net.Conn
@@ -382,89 +404,6 @@ var videoFrameWidth int
 var videoFrameHeight int
 var videoFrameMutex sync.RWMutex
 var jsonCommandHandlerChannels map[string]chan *JsonCommandHandlerData = map[string]chan *JsonCommandHandlerData{}
-
-var jsonCommandHandlerFuncs template.FuncMap = template.FuncMap{
-	"atoi": func(s string) []int {
-		i, err := strconv.Atoi(s)
-		if err != nil {
-			return nil
-		}
-
-		return []int{i}
-	},
-	"contains":  strings.Contains,
-	"hasprefix": strings.HasPrefix,
-	"hassuffix": strings.HasSuffix,
-	"lower":     strings.ToLower,
-	"upper":     strings.ToUpper,
-	"split":     strings.Split,
-	"join":      strings.Join,
-	"match":     regexp.MatchString,
-	"env":       os.Getenv,
-	"pid":       os.Getpid,
-	"run": func(cs CommandSlice, wait bool) bool {
-		if wait {
-			return runCommands(cs)
-		}
-		go runCommands(cs)
-		return true
-	},
-	"exec": func(stdin string, name string, arg ...string) (result struct {
-		Success bool
-		Output  string
-	}) {
-		cmd := exec.Command(name, arg...)
-		if stdin != "" {
-			cmd.Stdin = strings.NewReader(stdin)
-		}
-		output, err := cmd.CombinedOutput()
-		result.Success = err == nil
-		result.Output = string(output)
-		return
-	},
-	"http": func(method string, url string, body string, timeout int, headers ...[2]string) (result struct {
-		StatusCode int
-		Headers    map[string][]string
-		Body       string
-	}) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
-		defer cancel()
-
-		var bodyReader io.Reader
-		if body != "" {
-			bodyReader = strings.NewReader(body)
-		}
-
-		req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
-		if err != nil {
-			result.StatusCode = -1
-			return
-		}
-
-		for _, header := range headers {
-			req.Header.Add(header[0], header[1])
-		}
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			result.StatusCode = -1
-			return
-		}
-
-		result.StatusCode = resp.StatusCode
-		result.Headers = resp.Header
-		responseBodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		result.Body = string(responseBodyBytes)
-		return
-	},
-	"httpRequestHeader": func(key string, value string) [2]string {
-		return [2]string{key, value}
-	},
-	"command": func(c ...string) CommandSlice {
-		return CommandSlice([][]string{c})
-	},
-}
 
 func readDummyByte(c net.Conn) bool {
 	data := make([]byte, 1)
@@ -734,7 +673,7 @@ func listHandler(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func jsonCommandStreamHandler(w http.ResponseWriter, req *http.Request) {
+func jsonCommandsHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
 	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
@@ -777,7 +716,7 @@ func jsonCommandStreamHandler(w http.ResponseWriter, req *http.Request) {
 			}
 
 			if len(cs) > 0 {
-				if req.URL.Path == "/jsoncommandstream" {
+				if req.URL.Path == "/jsoncommands" {
 					go runCommands(cs)
 				} else {
 					jsonCommandHandlerChannels[req.URL.Path[1:]] <- &JsonCommandHandlerData{
@@ -842,7 +781,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if !config.HttpServer.Enabled && !config.UdpServer.Enabled && !config.StdinCommands.Enabled {
+	if !config.HttpServer.Enabled && !config.TcpJsonCommands.Enabled && !config.UdpJsonCommands.Enabled && !config.StdinJsonCommands.Enabled {
 		os.Exit(1)
 	}
 
@@ -862,17 +801,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	if config.UdpServer.Enabled {
-		if config.UdpServer.Address == "" {
+	if config.TcpJsonCommands.Enabled {
+		if config.TcpJsonCommands.Address == "" {
 			os.Exit(1)
 		}
 
-		if config.UdpServer.HandlerTemplate != "" && config.JsonCommandHandlerTemplates[config.UdpServer.HandlerTemplate] == "" {
+		if config.TcpJsonCommands.HandlerTemplate != "" && config.JsonCommandHandlerTemplates[config.TcpJsonCommands.HandlerTemplate] == "" {
 			os.Exit(1)
 		}
 	}
 
-	if config.StdinCommands.Enabled && config.StdinCommands.HandlerTemplate != "" && config.JsonCommandHandlerTemplates[config.StdinCommands.HandlerTemplate] == "" {
+	if config.UdpJsonCommands.Enabled {
+		if config.UdpJsonCommands.Address == "" {
+			os.Exit(1)
+		}
+
+		if config.UdpJsonCommands.HandlerTemplate != "" && config.JsonCommandHandlerTemplates[config.UdpJsonCommands.HandlerTemplate] == "" {
+			os.Exit(1)
+		}
+	}
+
+	if config.StdinJsonCommands.Enabled && config.StdinJsonCommands.HandlerTemplate != "" && config.JsonCommandHandlerTemplates[config.StdinJsonCommands.HandlerTemplate] == "" {
 		os.Exit(1)
 	}
 
@@ -908,10 +857,11 @@ func main() {
 			var err error
 
 			if !config.Scrcpy.Forward {
-				listener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", config.Scrcpy.Port))
+				scrcpyListener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", config.Scrcpy.Port))
 				if err != nil {
 					return
 				}
+				defer scrcpyListener.Close()
 			}
 
 			for connect := range connectionControlChannel {
@@ -990,21 +940,21 @@ func main() {
 						}
 
 						if config.Scrcpy.Video {
-							videoSocket, err = listener.Accept()
+							videoSocket, err = scrcpyListener.Accept()
 							if err != nil {
 								return
 							}
 						}
 
 						if config.Scrcpy.Audio {
-							audioSocket, err = listener.Accept()
+							audioSocket, err = scrcpyListener.Accept()
 							if err != nil {
 								return
 							}
 						}
 
 						if config.Scrcpy.Control {
-							controlSocket, err = listener.Accept()
+							controlSocket, err = scrcpyListener.Accept()
 							if err != nil {
 								return
 							}
@@ -1258,10 +1208,10 @@ func main() {
 		}
 
 		for name := range config.JsonCommandHandlerTemplates {
-			endpoint(fmt.Sprintf("/%s", name), jsonCommandStreamHandler)
+			endpoint(fmt.Sprintf("/%s", name), jsonCommandsHandler)
 		}
 
-		endpoint("/jsoncommandstream", jsonCommandStreamHandler)
+		endpoint("/jsoncommands", jsonCommandsHandler)
 
 		if config.HttpServer.Static != "" {
 			http.Handle("/", http.FileServer(http.Dir(config.HttpServer.Static)))
@@ -1292,9 +1242,51 @@ func main() {
 		}
 	}
 
-	if config.UdpServer.Enabled {
+	if config.TcpJsonCommands.Enabled {
 		go func() {
-			c, err := net.ListenPacket("udp", config.UdpServer.Address)
+			listener, err := net.Listen("tcp", config.TcpJsonCommands.Address)
+			if err != nil {
+				return
+			}
+			defer listener.Close()
+
+			for {
+				c, err := listener.Accept()
+				if err != nil {
+					break
+				}
+
+				go func() {
+					defer c.Close()
+					data := make([]byte, 1024)
+
+					for {
+						n, err := c.Read(data)
+						if err != nil {
+							break
+						}
+
+						var cs CommandSlice
+
+						if json.Unmarshal(data[:n], &cs) == nil && len(cs) > 0 {
+							if len(config.TcpJsonCommands.HandlerTemplate) == 0 {
+								go runCommands(cs)
+							} else {
+								jsonCommandHandlerChannels[config.TcpJsonCommands.HandlerTemplate] <- &JsonCommandHandlerData{
+									From:     c.RemoteAddr().String(),
+									Commands: cs,
+								}
+							}
+						}
+					}
+				}()
+			}
+		}()
+	}
+
+	if config.UdpJsonCommands.Enabled {
+		go func() {
+			c, err := net.ListenPacket("udp", config.UdpJsonCommands.Address)
 			if err != nil {
 				return
 			}
@@ -1311,10 +1303,10 @@ func main() {
 				var cs CommandSlice
 
 				if json.Unmarshal(data[:n], &cs) == nil && len(cs) > 0 {
-					if len(config.UdpServer.HandlerTemplate) == 0 {
+					if len(config.UdpJsonCommands.HandlerTemplate) == 0 {
 						go runCommands(cs)
 					} else {
-						jsonCommandHandlerChannels[config.UdpServer.HandlerTemplate] <- &JsonCommandHandlerData{
+						jsonCommandHandlerChannels[config.UdpJsonCommands.HandlerTemplate] <- &JsonCommandHandlerData{
 							From:     addr.String(),
 							Commands: cs,
 						}
@@ -1324,7 +1316,7 @@ func main() {
 		}()
 	}
 
-	if config.StdinCommands.Enabled {
+	if config.StdinJsonCommands.Enabled {
 		go func() {
 			if stdinDecoder == nil {
 				stdinDecoder = json.NewDecoder(os.Stdin)
@@ -1342,10 +1334,10 @@ func main() {
 					stdinDecoder = json.NewDecoder(os.Stdin)
 					fmt.Fprintln(os.Stderr, err)
 				} else if len(cs) > 0 {
-					if len(config.StdinCommands.HandlerTemplate) == 0 {
+					if len(config.StdinJsonCommands.HandlerTemplate) == 0 {
 						runCommands(cs)
 					} else {
-						jsonCommandHandlerChannels[config.StdinCommands.HandlerTemplate] <- &JsonCommandHandlerData{
+						jsonCommandHandlerChannels[config.StdinJsonCommands.HandlerTemplate] <- &JsonCommandHandlerData{
 							From:     "stdin",
 							Commands: cs,
 						}
