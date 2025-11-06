@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func clipboardGet(cut bool, text *string, timeout time.Duration) int {
+func getClipboard(cut bool) bool {
 	data := make([]byte, 2)
 	data[0] = 0x08
 	if cut {
@@ -20,43 +20,19 @@ func clipboardGet(cut bool, text *string, timeout time.Duration) int {
 
 	n, err := controlSocket.Write(data)
 	if err != nil {
-		return http.StatusInternalServerError
+		return false
 	}
 	if n != 2 {
-		return http.StatusInternalServerError
+		return false
 	}
 
-	if text != nil {
-		select {
-		case s := <-clipboardChannel:
-			if strings.HasPrefix(s, "\"") && strings.HasSuffix(s, "\"") {
-				*text = s
-				return http.StatusOK
-			} else {
-				return http.StatusInternalServerError
-			}
-		case <-time.After(timeout):
-			return http.StatusInternalServerError
-		}
-	}
-
-	return http.StatusNoContent
+	return true
 }
 
-func clipboardSet(text string, sequenceString string, paste bool, timeout time.Duration) bool {
-	var sequence uint64
-	var err error
-
-	if sequenceString != "" {
-		sequence, err = strconv.ParseUint(sequenceString, 10, 64)
-		if err != nil {
-			return false
-		}
-	}
-
+func setClipboard(text string, sequence int, paste bool, timeout time.Duration) bool {
 	data := make([]byte, 14+len(text))
 	data[0] = 0x09
-	binary.BigEndian.PutUint64(data[1:], sequence)
+	binary.BigEndian.PutUint64(data[1:], uint64(sequence))
 	if paste {
 		data[9] = 0x01
 	}
@@ -74,7 +50,7 @@ func clipboardSet(text string, sequenceString string, paste bool, timeout time.D
 	if timeout > 0 {
 		select {
 		case s := <-clipboardChannel:
-			if s != sequenceString {
+			if s != strconv.Itoa(sequence) {
 				return false
 			}
 		case <-time.After(timeout):
@@ -85,25 +61,192 @@ func clipboardSet(text string, sequenceString string, paste bool, timeout time.D
 	return true
 }
 
-func clipboardSendStream(w http.ResponseWriter, req *http.Request) {
-	if !config.Scrcpy.Control {
-		w.WriteHeader(http.StatusNotFound)
+func getClipboardHandler(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+
+	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
-	var err error
+	origin := req.Header.Get("Origin")
 
-	for {
+	switch req.Method {
+	case http.MethodOptions:
+		if req.Header.Get("Access-Control-Request-Method") == "" {
+			w.Header().Set("Allow", "OPTIONS, GET")
+		} else if origin != "" {
+			requestHeaders := req.Header.Get("Access-Control-Request-Headers")
+
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET")
+
+			if requestHeaders != "" {
+				w.Header().Set("Access-Control-Allow-Headers", requestHeaders)
+			}
+		}
+	case http.MethodGet:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		if controlSocket == nil {
+			http.NotFound(w, req)
+			return
+		}
+
+		if !getClipboard(req.URL.Path == "/clipboardcut") {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
 		select {
-		case line := <-clipboardChannel:
-			_, err = fmt.Fprintln(w, line)
+		case s := <-clipboardChannel:
+			if strings.HasPrefix(s, "\"") && strings.HasSuffix(s, "\"") {
+				w.Write([]byte(s))
+			} else {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		case <-time.After(2 * time.Second):
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	default:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		w.Header().Set("Allow", "OPTIONS, GET")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func setClipboardHandler(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+
+	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	origin := req.Header.Get("Origin")
+
+	switch req.Method {
+	case http.MethodOptions:
+		if req.Header.Get("Access-Control-Request-Method") == "" {
+			w.Header().Set("Allow", "OPTIONS, GET")
+		} else if origin != "" {
+			requestHeaders := req.Header.Get("Access-Control-Request-Headers")
+
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET")
+
+			if requestHeaders != "" {
+				w.Header().Set("Access-Control-Allow-Headers", requestHeaders)
+			}
+		}
+	case http.MethodGet:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		query := req.URL.Query()
+		sequenceString := query.Get("sequence")
+		var sequence int
+		var timeout time.Duration
+		var err error
+
+		if sequenceString != "" {
+			sequence, err = strconv.Atoi(sequenceString)
 			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
 
-			w.(http.Flusher).Flush()
-		case <-req.Context().Done():
+			timeoutString := query.Get("timeout")
+			if timeoutString != "" {
+				timeout, err = time.ParseDuration(timeoutString)
+				if err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+			}
+		}
+
+		if !setClipboard(query.Get("text"), sequence, req.URL.Path == "/setclipboardpaste", timeout) {
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		w.Header().Set("Allow", "OPTIONS, GET")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func clipboardStreamHandler(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+
+	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	origin := req.Header.Get("Origin")
+
+	switch req.Method {
+	case http.MethodOptions:
+		if req.Header.Get("Access-Control-Request-Method") == "" {
+			w.Header().Set("Allow", "OPTIONS, GET")
+		} else if origin != "" {
+			requestHeaders := req.Header.Get("Access-Control-Request-Headers")
+
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET")
+
+			if requestHeaders != "" {
+				w.Header().Set("Access-Control-Allow-Headers", requestHeaders)
+			}
+		}
+	case http.MethodGet:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		var err error
+
+		for {
+			select {
+			case line := <-clipboardChannel:
+				_, err = fmt.Fprintln(w, line)
+				if err != nil {
+					return
+				}
+
+				w.(http.Flusher).Flush()
+			case <-req.Context().Done():
+				return
+			}
+		}
+	default:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		w.Header().Set("Allow", "OPTIONS, GET")
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }

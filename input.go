@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"net"
 	"net/http"
 	"strconv"
 )
@@ -116,7 +115,7 @@ var keycodeMap = map[string]int{
 	"allapps":        284,
 }
 
-func inputSdkInjectKeycode(up bool, keycode int, repeat int, metaState int) bool {
+func injectKeycode(up bool, keycode int, repeat int, metaState int) bool {
 	data := make([]byte, 14)
 	if up {
 		data[1] = 0x01
@@ -136,7 +135,7 @@ func inputSdkInjectKeycode(up bool, keycode int, repeat int, metaState int) bool
 	return true
 }
 
-func inputSdkInjectText(text string) bool {
+func injectText(text string) bool {
 	data := make([]byte, 5+len(text))
 	data[0] = 0x01
 	binary.BigEndian.PutUint32(data[1:5], uint32(len(text)))
@@ -153,7 +152,7 @@ func inputSdkInjectText(text string) bool {
 	return true
 }
 
-func inputSdkInjectTouchEvent(action int, pointerId int, x int, y int, width int, height int, button int) bool {
+func injectTouchEvent(action int, pointerId int, x int, y int, width int, height int, button int) bool {
 	data := make([]byte, 32)
 	data[0] = 0x02
 	data[1] = byte(action)
@@ -182,7 +181,7 @@ func inputSdkInjectTouchEvent(action int, pointerId int, x int, y int, width int
 	return true
 }
 
-func inputSdkInjectScrollEvent(x int, y int, width int, height int, direction string) bool {
+func injectScrollEvent(x int, y int, width int, height int, direction string) bool {
 	data := make([]byte, 21)
 	data[0] = 0x03
 	binary.BigEndian.PutUint32(data[1:], uint32(x))
@@ -213,141 +212,66 @@ func inputSdkInjectScrollEvent(x int, y int, width int, height int, direction st
 	return true
 }
 
-func inputUhidCreateDevice(reportDescString string, id int, name string, vendorIdString string, productIdString string, controlSocket net.Conn) bool {
-	reportDesc, err := hex.DecodeString(reportDescString)
-	if err != nil {
-		return false
-	}
-
-	var b bytes.Buffer
-
-	b.WriteByte(0x0C)
-	binary.Write(&b, binary.BigEndian, uint16(id))
-	if vendorIdString == "" || productIdString == "" {
-		binary.Write(&b, binary.BigEndian, uint32(0))
-	} else if len(vendorIdString) == 4 && len(productIdString) == 4 {
-		vendorId, err := strconv.ParseUint(vendorIdString, 16, 16)
+func createUhidDevices() bool {
+	for i := range config.Scrcpy.UhidDevices {
+		reportDesc, err := hex.DecodeString(config.Scrcpy.UhidDevices[i].ReportDesc)
 		if err != nil {
 			return false
 		}
 
-		productId, err := strconv.ParseUint(productIdString, 16, 16)
-		if err != nil {
-			return false
-		}
+		var b bytes.Buffer
 
-		binary.Write(&b, binary.BigEndian, uint16(vendorId))
-		binary.Write(&b, binary.BigEndian, uint16(productId))
-	}
-	b.WriteByte(byte(len(name)))
-	if name != "" {
-		b.WriteString(name)
-	}
-	binary.Write(&b, binary.BigEndian, uint16(len(reportDesc)))
-	b.Write(reportDesc)
-
-	_, err = b.WriteTo(controlSocket)
-	if err != nil {
-		return false
-	}
-
-	return true
-}
-
-func inputUhidKeyboardInput(scancode int, modifiers int) bool {
-	data := make([]byte, 13)
-	data[0] = 0x0D
-	data[2] = 0x01
-	data[4] = 0x08
-	data[5] = byte(modifiers)
-	data[7] = byte(scancode)
-
-	n, err := controlSocket.Write(data)
-	if err != nil {
-		return false
-	}
-	if n != 13 {
-		return false
-	}
-
-	return true
-}
-
-func inputUhidKeyboardSendOutputStream(w http.ResponseWriter, req *http.Request) {
-	if !config.Scrcpy.Control {
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
-
-	var err error
-
-	for {
-		select {
-		case line := <-uhidKeyboardOutputChannel:
-			_, err = fmt.Fprintln(w, line)
+		b.WriteByte(0x0C)
+		binary.Write(&b, binary.BigEndian, uint16(config.Scrcpy.UhidDevices[i].Id))
+		if config.Scrcpy.UhidDevices[i].VendorId == "" || config.Scrcpy.UhidDevices[i].ProductId == "" {
+			binary.Write(&b, binary.BigEndian, uint32(0))
+		} else if len(config.Scrcpy.UhidDevices[i].VendorId) == 4 && len(config.Scrcpy.UhidDevices[i].ProductId) == 4 {
+			vendorId, err := strconv.ParseUint(config.Scrcpy.UhidDevices[i].VendorId, 16, 16)
 			if err != nil {
-				return
+				return false
 			}
 
-			w.(http.Flusher).Flush()
-		case <-req.Context().Done():
-			return
+			productId, err := strconv.ParseUint(config.Scrcpy.UhidDevices[i].ProductId, 16, 16)
+			if err != nil {
+				return false
+			}
+
+			binary.Write(&b, binary.BigEndian, uint16(vendorId))
+			binary.Write(&b, binary.BigEndian, uint16(productId))
+		}
+		b.WriteByte(byte(len(config.Scrcpy.UhidDevices[i].Name)))
+		if config.Scrcpy.UhidDevices[i].Name != "" {
+			b.WriteString(config.Scrcpy.UhidDevices[i].Name)
+		}
+		binary.Write(&b, binary.BigEndian, uint16(len(reportDesc)))
+		b.Write(reportDesc)
+
+		_, err = b.WriteTo(controlSocket)
+		if err != nil {
+			return false
 		}
 	}
+
+	return true
 }
 
-func inputUhidMouseInput(button int, x int, y int, wheelDirection string) bool {
-	data := make([]byte, 9)
-	data[0] = 0x0D
-	data[2] = 0x02
-	data[4] = 0x04
-	data[5] = byte(button)
-	data[6] = byte(x)
-	data[7] = byte(y)
-	switch wheelDirection {
-	case "up":
-		data[8] = 0x01
-	case "down":
-		data[8] = 0xFF
-	}
+func uhidInput(id int, data []byte) bool {
+	var b bytes.Buffer
 
-	n, err := controlSocket.Write(data)
+	b.WriteByte(0x0D)
+	binary.Write(&b, binary.BigEndian, uint16(id))
+	binary.Write(&b, binary.BigEndian, uint16(len(data)))
+	b.Write(data)
+
+	_, err := b.WriteTo(controlSocket)
 	if err != nil {
-		return false
-	}
-	if n != 9 {
 		return false
 	}
 
 	return true
 }
 
-func inputUhidGamepadInput(leftX int, leftY int, rightX int, rightY int, leftTrigger int, rightTrigger int, buttons int, dpad int) bool {
-	data := make([]byte, 20)
-	data[0] = 0x0D
-	data[2] = 0x03
-	data[4] = 0x0F
-	binary.LittleEndian.PutUint16(data[5:], uint16(leftX))
-	binary.LittleEndian.PutUint16(data[7:], uint16(leftY))
-	binary.LittleEndian.PutUint16(data[9:], uint16(rightX))
-	binary.LittleEndian.PutUint16(data[11:], uint16(rightY))
-	binary.LittleEndian.PutUint16(data[13:], uint16(leftTrigger))
-	binary.LittleEndian.PutUint16(data[15:], uint16(rightTrigger))
-	binary.LittleEndian.PutUint16(data[17:], uint16(buttons))
-	data[19] = byte(dpad)
-
-	n, err := controlSocket.Write(data)
-	if err != nil {
-		return false
-	}
-	if n != 20 {
-		return false
-	}
-
-	return true
-}
-
-func inputGetMouseButton(buttonString string) int {
+func getMouseButton(buttonString string) int {
 	switch buttonString {
 	case "1", "left":
 		return 1
@@ -356,6 +280,541 @@ func inputGetMouseButton(buttonString string) int {
 	case "4", "middle":
 		return 4
 	default:
-		return 0
+		return -1
+	}
+}
+
+func keyHandler(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+
+	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	origin := req.Header.Get("Origin")
+
+	switch req.Method {
+	case http.MethodOptions:
+		if req.Header.Get("Access-Control-Request-Method") == "" {
+			w.Header().Set("Allow", "OPTIONS, GET")
+		} else if origin != "" {
+			requestHeaders := req.Header.Get("Access-Control-Request-Headers")
+
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET")
+
+			if requestHeaders != "" {
+				w.Header().Set("Access-Control-Allow-Headers", requestHeaders)
+			}
+		}
+	case http.MethodGet:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		query := req.URL.Query()
+		var keycode int
+
+		if query.Has("keycode") {
+			var err error
+			keycode, err = strconv.Atoi(query.Get("keycode"))
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+		} else {
+			keycode = keycodeMap[query.Get("key")]
+			if keycode == 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+		}
+
+		switch req.URL.Path {
+		case "/key":
+			if !injectKeycode(false, keycode, 0, 0) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			if !injectKeycode(true, keycode, 0, 0) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		case "/keydown":
+			if !injectKeycode(false, keycode, 0, 0) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		case "/keyup":
+			if !injectKeycode(true, keycode, 0, 0) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		w.Header().Set("Allow", "OPTIONS, GET")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func typeHandler(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+
+	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	origin := req.Header.Get("Origin")
+
+	switch req.Method {
+	case http.MethodOptions:
+		if req.Header.Get("Access-Control-Request-Method") == "" {
+			w.Header().Set("Allow", "OPTIONS, GET")
+		} else if origin != "" {
+			requestHeaders := req.Header.Get("Access-Control-Request-Headers")
+
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET")
+
+			if requestHeaders != "" {
+				w.Header().Set("Access-Control-Allow-Headers", requestHeaders)
+			}
+		}
+	case http.MethodGet:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		text := req.URL.Query().Get("text")
+		if text != "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		if !injectText(text) {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		w.Header().Set("Allow", "OPTIONS, GET")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func touchHandler(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+
+	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	origin := req.Header.Get("Origin")
+
+	switch req.Method {
+	case http.MethodOptions:
+		if req.Header.Get("Access-Control-Request-Method") == "" {
+			w.Header().Set("Allow", "OPTIONS, GET")
+		} else if origin != "" {
+			requestHeaders := req.Header.Get("Access-Control-Request-Headers")
+
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET")
+
+			if requestHeaders != "" {
+				w.Header().Set("Access-Control-Allow-Headers", requestHeaders)
+			}
+		}
+	case http.MethodGet:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		query := req.URL.Query()
+
+		x, err := strconv.Atoi(query.Get("x"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		y, err := strconv.Atoi(query.Get("y"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		width, err := strconv.Atoi(query.Get("w"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		height, err := strconv.Atoi(query.Get("h"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		switch req.URL.Path {
+		case "/touch":
+			if !injectTouchEvent(0, -2, x, y, width, height, 1) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			if !injectTouchEvent(1, -2, x, y, width, height, 1) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		case "/touchdown":
+			if !injectTouchEvent(0, -2, x, y, width, height, 1) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		case "/touchup":
+			if !injectTouchEvent(1, -2, x, y, width, height, 1) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		case "/touchmove":
+			if !injectTouchEvent(2, -2, x, y, width, height, 1) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		w.Header().Set("Allow", "OPTIONS, GET")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func mouseHandler(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+
+	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	origin := req.Header.Get("Origin")
+
+	switch req.Method {
+	case http.MethodOptions:
+		if req.Header.Get("Access-Control-Request-Method") == "" {
+			w.Header().Set("Allow", "OPTIONS, GET")
+		} else if origin != "" {
+			requestHeaders := req.Header.Get("Access-Control-Request-Headers")
+
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET")
+
+			if requestHeaders != "" {
+				w.Header().Set("Access-Control-Allow-Headers", requestHeaders)
+			}
+		}
+	case http.MethodGet:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		query := req.URL.Query()
+
+		button := getMouseButton(query.Get("button"))
+		if button == -1 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		x, err := strconv.Atoi(query.Get("x"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		y, err := strconv.Atoi(query.Get("y"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		width, err := strconv.Atoi(query.Get("w"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		height, err := strconv.Atoi(query.Get("h"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		switch req.URL.Path {
+		case "/mouseclick":
+			if !injectTouchEvent(0, -1, x, y, width, height, button) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			if !injectTouchEvent(1, -1, x, y, width, height, button) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		case "/mousedown":
+			if !injectTouchEvent(0, -1, x, y, width, height, button) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		case "/mouseup":
+			if !injectTouchEvent(1, -1, x, y, width, height, button) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		case "/mousemove":
+			if !injectTouchEvent(2, -1, x, y, width, height, button) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		w.Header().Set("Allow", "OPTIONS, GET")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func scrollHandler(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+
+	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	origin := req.Header.Get("Origin")
+
+	switch req.Method {
+	case http.MethodOptions:
+		if req.Header.Get("Access-Control-Request-Method") == "" {
+			w.Header().Set("Allow", "OPTIONS, GET")
+		} else if origin != "" {
+			requestHeaders := req.Header.Get("Access-Control-Request-Headers")
+
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET")
+
+			if requestHeaders != "" {
+				w.Header().Set("Access-Control-Allow-Headers", requestHeaders)
+			}
+		}
+	case http.MethodGet:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		query := req.URL.Query()
+
+		x, err := strconv.Atoi(query.Get("x"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		y, err := strconv.Atoi(query.Get("y"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		width, err := strconv.Atoi(query.Get("w"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		height, err := strconv.Atoi(query.Get("h"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		if !injectScrollEvent(x, y, width, height, req.URL.Path[7:]) {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		w.Header().Set("Allow", "OPTIONS, GET")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func uhidInputHandler(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+
+	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	origin := req.Header.Get("Origin")
+
+	switch req.Method {
+	case http.MethodOptions:
+		if req.Header.Get("Access-Control-Request-Method") == "" {
+			w.Header().Set("Allow", "OPTIONS, GET")
+		} else if origin != "" {
+			requestHeaders := req.Header.Get("Access-Control-Request-Headers")
+
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET")
+
+			if requestHeaders != "" {
+				w.Header().Set("Access-Control-Allow-Headers", requestHeaders)
+			}
+		}
+	case http.MethodGet:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		query := req.URL.Query()
+
+		id, err := strconv.Atoi(query.Get("id"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		data, err := hex.DecodeString(query.Get("data"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if len(data) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		if !uhidInput(id, data) {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		w.Header().Set("Allow", "OPTIONS, GET")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func uhidOutputStreamHandler(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+
+	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	origin := req.Header.Get("Origin")
+
+	switch req.Method {
+	case http.MethodOptions:
+		if req.Header.Get("Access-Control-Request-Method") == "" {
+			w.Header().Set("Allow", "OPTIONS, GET")
+		} else if origin != "" {
+			requestHeaders := req.Header.Get("Access-Control-Request-Headers")
+
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET")
+
+			if requestHeaders != "" {
+				w.Header().Set("Access-Control-Allow-Headers", requestHeaders)
+			}
+		}
+	case http.MethodGet:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		var err error
+
+		for {
+			select {
+			case line := <-uhidOutputChannel:
+				_, err = fmt.Fprintln(w, line)
+				if err != nil {
+					return
+				}
+
+				w.(http.Flusher).Flush()
+			case <-req.Context().Done():
+				return
+			}
+		}
+	default:
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		w.Header().Set("Allow", "OPTIONS, GET")
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }

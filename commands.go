@@ -1,11 +1,9 @@
 package main
 
 import (
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -13,7 +11,7 @@ import (
 	"time"
 )
 
-func commandsRun(commands CommandSlice) bool {
+func runCommands(commands CommandSlice) bool {
 	for _, command := range commands {
 		if len(command) == 0 {
 			return false
@@ -21,21 +19,17 @@ func commandsRun(commands CommandSlice) bool {
 
 		cs, ok := config.CustomCommands[command[0]]
 		if ok {
-			if commandsRun(cs) {
+			if runCommands(cs) {
 				continue
 			} else {
 				return false
 			}
 		}
 
-		if config.Scrcpy.Port < 1 {
-			if command[0] != "sleep" && command[0] != "adb" && command[0] != "adb2" {
-				return false
-			}
-		} else if controlSocket == nil {
-			if command[0] != "connect" && command[0] != "startscrcpyserver" && command[0] != "sleep" && command[0] != "adb" && command[0] != "adb2" && command[0] != "setconnectedcommands" {
-				return false
-			}
+		if !config.Scrcpy.Enabled && command[0] != "sleep" && command[0] != "adb" && command[0] != "adb2" {
+			return false
+		} else if controlSocket == nil && command[0] != "connect" && command[0] != "startscrcpyserver" && command[0] != "sleep" && command[0] != "adb" && command[0] != "adb2" && command[0] != "setconnectedcommands" {
+			return false
 		}
 
 		switch command[0] {
@@ -66,17 +60,6 @@ func commandsRun(commands CommandSlice) bool {
 		case "startscrcpyserver":
 			if !config.Adb.Enabled || !config.Scrcpy.Enabled {
 				return false
-			}
-
-			if scrcpyServer != nil {
-				select {
-				case connectionControlChannel <- false:
-					time.Sleep(1 * time.Second)
-				default:
-				}
-
-				scrcpyServer.Process.Kill()
-				scrcpyServer.Wait()
 			}
 
 			var args []string
@@ -133,7 +116,27 @@ func commandsRun(commands CommandSlice) bool {
 			}
 
 			if len(command) > 1 {
-				args = append(args, command[1:]...)
+				if len(command) == 2 && strings.HasPrefix(command[1], "[") {
+					var options []string
+					if json.Unmarshal([]byte(command[1]), &options) != nil {
+						return false
+					}
+
+					args = append(args, options...)
+				} else {
+					args = append(args, command[1:]...)
+				}
+			}
+
+			if scrcpyServer != nil {
+				select {
+				case connectionControlChannel <- false:
+					time.Sleep(1 * time.Second)
+				default:
+				}
+
+				scrcpyServer.Process.Kill()
+				scrcpyServer.Wait()
 			}
 
 			scrcpyServer = exec.Command(config.Adb.Executable, args...)
@@ -162,48 +165,29 @@ func commandsRun(commands CommandSlice) bool {
 			} else {
 				return false
 			}
-		case "createuhiddevices":
-			if len(command) == 4 {
-				if command[1] != "" {
-					if !inputUhidCreateDevice(command[1], 0x01, "", "", "", controlSocket) {
-						return false
-					}
+		case "uhidinput":
+			if len(command) == 3 {
+				id, err := strconv.Atoi(command[1])
+				if err != nil {
+					return false
 				}
 
-				if command[2] != "" {
-					if !inputUhidCreateDevice(command[2], 0x02, "", "", "", controlSocket) {
-						return false
-					}
+				data, err := hex.DecodeString(command[2])
+				if err != nil {
+					return false
+				}
+				if len(data) == 0 {
+					return false
 				}
 
-				if command[3] != "" {
-					if !inputUhidCreateDevice(command[3], 0x03, "", "", "", controlSocket) {
-						return false
-					}
-				}
-			} else if len(command) == 13 {
-				if command[1] != "" {
-					if !inputUhidCreateDevice(command[1], 0x01, command[2], command[3], command[4], controlSocket) {
-						return false
-					}
-				}
-
-				if command[5] != "" {
-					if !inputUhidCreateDevice(command[5], 0x02, command[6], command[7], command[8], controlSocket) {
-						return false
-					}
-				}
-
-				if command[9] != "" {
-					if !inputUhidCreateDevice(command[9], 0x03, command[10], command[11], command[12], controlSocket) {
-						return false
-					}
+				if !uhidInput(id, data) {
+					return false
 				}
 			} else {
 				return false
 			}
 		case "key", "key2":
-			if len(command) == 2 || len(command) == 5 {
+			if len(command) == 2 {
 				var keycode int
 				var err error
 
@@ -219,98 +203,61 @@ func commandsRun(commands CommandSlice) bool {
 					}
 				}
 
-				if len(command) == 2 {
-					if !inputSdkInjectKeycode(false, keycode, 0, 0) {
-						return false
-					}
+				if !injectKeycode(false, keycode, 0, 0) {
+					return false
+				}
 
-					if !inputSdkInjectKeycode(true, keycode, 0, 0) {
-						return false
-					}
-				} else {
-					up, err := strconv.ParseBool(command[2])
-					if err != nil {
-						return false
-					}
-
-					repeat, err := strconv.Atoi(command[3])
-					if err != nil {
-						return false
-					}
-
-					metaState, err := strconv.Atoi(command[4])
-					if err != nil {
-						return false
-					}
-
-					if !inputSdkInjectKeycode(up, keycode, repeat, metaState) {
-						return false
-					}
+				if !injectKeycode(true, keycode, 0, 0) {
+					return false
 				}
 			} else {
 				return false
 			}
-		case "key3":
-			if len(command) == 2 || len(command) == 3 {
-				scancode, err := strconv.Atoi(command[1])
+		case "key3", "key4":
+			if len(command) == 5 {
+				var keycode int
+				var err error
+
+				if command[0] == "key3" {
+					keycode = keycodeMap[command[1]]
+					if keycode == 0 {
+						return false
+					}
+				} else {
+					keycode, err = strconv.Atoi(command[1])
+					if err != nil {
+						return false
+					}
+				}
+
+				up, err := strconv.ParseBool(command[2])
 				if err != nil {
 					return false
 				}
 
-				if len(command) == 2 {
-					if !inputUhidKeyboardInput(scancode, 0) {
-						return false
-					}
+				repeat, err := strconv.Atoi(command[3])
+				if err != nil {
+					return false
+				}
 
-					if scancode != 0 {
-						if !inputUhidKeyboardInput(0, 0) {
-							return false
-						}
-					}
-				} else {
-					modifiers, err := strconv.Atoi(command[2])
-					if err != nil {
-						return false
-					}
+				metaState, err := strconv.Atoi(command[4])
+				if err != nil {
+					return false
+				}
 
-					if !inputUhidKeyboardInput(scancode, modifiers) {
-						return false
-					}
+				if !injectKeycode(up, keycode, repeat, metaState) {
+					return false
 				}
 			} else {
 				return false
 			}
-		case "type", "typebase64", "typebase64url", "typehex":
+		case "type":
 			if len(command) == 2 {
 				if command[1] == "" {
 					return false
 				}
 
-				var text string
-
-				if command[0] == "typebase64" {
-					textBytes, err := base64.StdEncoding.DecodeString(command[1])
-					if err != nil {
-						return false
-					}
-					text = string(textBytes)
-				} else if command[0] == "typebase64url" {
-					textBytes, err := base64.URLEncoding.DecodeString(command[1])
-					if err != nil {
-						return false
-					}
-					text = string(textBytes)
-				} else if command[0] == "typehex" {
-					textBytes, err := hex.DecodeString(command[1])
-					if err != nil {
-						return false
-					}
-					text = string(textBytes)
-				} else {
-					text = command[1]
-				}
-
-				if !inputSdkInjectText(text) {
+				if !injectText(command[1]) {
 					return false
 				}
 			} else {
@@ -338,11 +285,11 @@ func commandsRun(commands CommandSlice) bool {
 					return false
 				}
 
-				if !inputSdkInjectTouchEvent(0, -2, x, y, width, height, 1) {
+				if !injectTouchEvent(0, -2, x, y, width, height, 1) {
 					return false
 				}
 
-				if !inputSdkInjectTouchEvent(1, -2, x, y, width, height, 1) {
+				if !injectTouchEvent(1, -2, x, y, width, height, 1) {
 					return false
 				}
 			} else {
@@ -370,7 +317,7 @@ func commandsRun(commands CommandSlice) bool {
 					return false
 				}
 
-				if !inputSdkInjectTouchEvent(0, -2, x, y, width, height, 1) {
+				if !injectTouchEvent(0, -2, x, y, width, height, 1) {
 					return false
 				}
 			} else {
@@ -398,7 +345,7 @@ func commandsRun(commands CommandSlice) bool {
 					return false
 				}
 
-				if !inputSdkInjectTouchEvent(1, -2, x, y, width, height, 1) {
+				if !injectTouchEvent(1, -2, x, y, width, height, 1) {
 					return false
 				}
 			} else {
@@ -426,32 +373,19 @@ func commandsRun(commands CommandSlice) bool {
 					return false
 				}
 
-				if !inputSdkInjectTouchEvent(2, -2, x, y, width, height, 1) {
+				if !injectTouchEvent(2, -2, x, y, width, height, 1) {
 					return false
 				}
 			} else {
 				return false
 			}
 		case "mouseclick":
-			if len(command) == 4 {
-				x, err := strconv.Atoi(command[2])
-				if err != nil {
+			if len(command) == 6 {
+				button := getMouseButton(command[1])
+				if button == -1 {
 					return false
 				}
 
-				y, err := strconv.Atoi(command[3])
-				if err != nil {
-					return false
-				}
-
-				if !inputUhidMouseInput(inputGetMouseButton(command[1]), x, y, "") {
-					return false
-				}
-
-				if !inputUhidMouseInput(0, 0, 0, "") {
-					return false
-				}
-			} else if len(command) == 6 {
 				x, err := strconv.Atoi(command[2])
 				if err != nil {
 					return false
@@ -472,34 +406,23 @@ func commandsRun(commands CommandSlice) bool {
 					return false
 				}
 
-				button := inputGetMouseButton(command[1])
-
-				if !inputSdkInjectTouchEvent(0, -1, x, y, width, height, button) {
+				if !injectTouchEvent(0, -1, x, y, width, height, button) {
 					return false
 				}
 
-				if !inputSdkInjectTouchEvent(1, -1, x, y, width, height, button) {
+				if !injectTouchEvent(1, -1, x, y, width, height, button) {
 					return false
 				}
 			} else {
 				return false
 			}
 		case "mousedown":
-			if len(command) == 4 {
-				x, err := strconv.Atoi(command[2])
-				if err != nil {
+			if len(command) == 6 {
+				button := getMouseButton(command[1])
+				if button == -1 {
 					return false
 				}
 
-				y, err := strconv.Atoi(command[3])
-				if err != nil {
-					return false
-				}
-
-				if !inputUhidMouseInput(inputGetMouseButton(command[1]), x, y, "") {
-					return false
-				}
-			} else if len(command) == 6 {
 				x, err := strconv.Atoi(command[2])
 				if err != nil {
 					return false
@@ -520,18 +443,19 @@ func commandsRun(commands CommandSlice) bool {
 					return false
 				}
 
-				if !inputSdkInjectTouchEvent(0, -1, x, y, width, height, inputGetMouseButton(command[1])) {
+				if !injectTouchEvent(0, -1, x, y, width, height, button) {
 					return false
 				}
 			} else {
 				return false
 			}
 		case "mouseup":
-			if len(command) == 1 {
-				if !inputUhidMouseInput(0, 0, 0, "") {
+			if len(command) == 6 {
+				button := getMouseButton(command[1])
+				if button == -1 {
 					return false
 				}
-			} else if len(command) == 6 {
+
 				x, err := strconv.Atoi(command[2])
 				if err != nil {
 					return false
@@ -552,42 +476,19 @@ func commandsRun(commands CommandSlice) bool {
 					return false
 				}
 
-				if !inputSdkInjectTouchEvent(1, -1, x, y, width, height, inputGetMouseButton(command[1])) {
+				if !injectTouchEvent(1, -1, x, y, width, height, button) {
 					return false
 				}
 			} else {
 				return false
 			}
 		case "mousemove":
-			if len(command) == 3 {
-				x, err := strconv.Atoi(command[1])
-				if err != nil {
+			if len(command) == 6 {
+				button := getMouseButton(command[1])
+				if button == -1 {
 					return false
 				}
 
-				y, err := strconv.Atoi(command[2])
-				if err != nil {
-					return false
-				}
-
-				if !inputUhidMouseInput(0, x, y, "") {
-					return false
-				}
-			} else if len(command) == 4 {
-				x, err := strconv.Atoi(command[2])
-				if err != nil {
-					return false
-				}
-
-				y, err := strconv.Atoi(command[3])
-				if err != nil {
-					return false
-				}
-
-				if !inputUhidMouseInput(inputGetMouseButton(command[1]), x, y, "") {
-					return false
-				}
-			} else if len(command) == 6 {
 				x, err := strconv.Atoi(command[2])
 				if err != nil {
 					return false
@@ -608,18 +509,14 @@ func commandsRun(commands CommandSlice) bool {
 					return false
 				}
 
-				if !inputSdkInjectTouchEvent(2, -1, x, y, width, height, inputGetMouseButton(command[1])) {
+				if !injectTouchEvent(2, -1, x, y, width, height, button) {
 					return false
 				}
 			} else {
 				return false
 			}
 		case "scrollleft", "scrollright", "scrollup", "scrolldown":
-			if len(command) == 1 && (command[0] == "scrollup" || command[0] == "scrolldown") {
-				if !inputUhidMouseInput(0, 0, 0, command[0][6:]) {
-					return false
-				}
-			} else if len(command) == 5 {
+			if len(command) == 5 {
 				x, err := strconv.Atoi(command[1])
 				if err != nil {
 					return false
@@ -640,55 +537,7 @@ func commandsRun(commands CommandSlice) bool {
 					return false
 				}
 
-				if !inputSdkInjectScrollEvent(x, y, width, height, command[0][6:]) {
-					return false
-				}
-			} else {
-				return false
-			}
-		case "gamepadinput":
-			if len(command) == 9 {
-				leftX, err := strconv.Atoi(command[1])
-				if err != nil {
-					return false
-				}
-
-				leftY, err := strconv.Atoi(command[2])
-				if err != nil {
-					return false
-				}
-
-				rightX, err := strconv.Atoi(command[3])
-				if err != nil {
-					return false
-				}
-
-				rightY, err := strconv.Atoi(command[4])
-				if err != nil {
-					return false
-				}
-
-				leftTrigger, err := strconv.Atoi(command[5])
-				if err != nil {
-					return false
-				}
-
-				rightTrigger, err := strconv.Atoi(command[6])
-				if err != nil {
-					return false
-				}
-
-				buttons, err := strconv.Atoi(command[7])
-				if err != nil {
-					return false
-				}
-
-				dpad, err := strconv.Atoi(command[8])
-				if err != nil {
-					return false
-				}
-
-				if !inputUhidGamepadInput(leftX, leftY, rightX, rightY, leftTrigger, rightTrigger, buttons, dpad) {
+				if !injectScrollEvent(x, y, width, height, command[0][6:]) {
 					return false
 				}
 			} else {
@@ -756,44 +605,23 @@ func commandsRun(commands CommandSlice) bool {
 			}
 		case "getclipboard", "getclipboardcut":
 			if len(command) == 1 {
-				if clipboardGet(command[0] == "getclipboardcut", nil, 0) != http.StatusNoContent {
+				if !getClipboard(command[0] == "getclipboardcut") {
 					return false
 				}
 			} else {
 				return false
 			}
-		case "setclipboard", "setclipboardbase64", "setclipboardbase64url", "setclipboardhex", "setclipboardpaste", "setclipboardpastebase64", "setclipboardpastebase64url", "setclipboardpastehex":
+		case "setclipboard", "setclipboardpaste":
 			if len(command) == 2 || len(command) == 3 || len(command) == 4 {
-				var text string
-
-				if strings.HasSuffix(command[0], "base64") {
-					decoded, err := base64.StdEncoding.DecodeString(command[1])
-					if err != nil {
-						return false
-					}
-					text = string(decoded)
-				} else if strings.HasSuffix(command[0], "base64url") {
-					decoded, err := base64.URLEncoding.DecodeString(command[1])
-					if err != nil {
-						return false
-					}
-					text = string(decoded)
-				} else if strings.HasSuffix(command[0], "hex") {
-					decoded, err := hex.DecodeString(command[1])
-					if err != nil {
-						return false
-					}
-					text = string(decoded)
-				} else {
-					text = command[1]
-				}
-
-				var sequenceString string
+				var sequence int
 				var timeout time.Duration
 				var err error
 
 				if len(command) > 2 {
-					sequenceString = command[2]
+					sequence, err = strconv.Atoi(command[2])
+					if err != nil {
+						return false
+					}
 
 					if len(command) == 4 {
 						timeout, err = time.ParseDuration(command[3])
@@ -803,7 +631,7 @@ func commandsRun(commands CommandSlice) bool {
 					}
 				}
 
-				if !clipboardSet(text, sequenceString, strings.HasPrefix(command[0], "setclipboardpaste"), timeout) {
+				if !setClipboard(command[1], sequence, command[0] == "setclipboardpaste", timeout) {
 					return false
 				}
 			} else {
