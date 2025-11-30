@@ -287,7 +287,7 @@ func getMouseButton(buttonString string) int {
 func keyHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -371,7 +371,7 @@ func keyHandler(w http.ResponseWriter, req *http.Request) {
 func typeHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -425,7 +425,7 @@ func typeHandler(w http.ResponseWriter, req *http.Request) {
 func touchHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -522,7 +522,7 @@ func touchHandler(w http.ResponseWriter, req *http.Request) {
 func mouseHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -625,7 +625,7 @@ func mouseHandler(w http.ResponseWriter, req *http.Request) {
 func scrollHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -699,7 +699,7 @@ func scrollHandler(w http.ResponseWriter, req *http.Request) {
 func uhidInputHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -765,7 +765,7 @@ func uhidInputHandler(w http.ResponseWriter, req *http.Request) {
 func uhidOutputStreamHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -213,6 +214,16 @@ func (c *UdpJsonCommandsConfig) UnmarshalJSON(data []byte) error {
 	return err
 }
 
+type TlsJsonCommandsConfig struct {
+	Enabled         bool     `json:"enabled"`
+	Address         string   `json:"address"`
+	Cert            string   `json:"cert"`
+	Key             string   `json:"key"`
+	ClientAuthCa    string   `json:"clientAuthCa"`
+	Clients         []string `json:"clients"`
+	HandlerTemplate string   `json:"handlerTemplate"`
+}
+
 type StdinJsonCommandsConfig struct {
 	Enabled         bool   `json:"enabled"`
 	HandlerTemplate string `json:"handlerTemplate"`
@@ -370,6 +381,7 @@ type Config struct {
 	HttpServer                  HttpServerConfig                      `json:"httpServer"`
 	TcpJsonCommands             TcpJsonCommandsConfig                 `json:"tcpJsonCommands"`
 	UdpJsonCommands             UdpJsonCommandsConfig                 `json:"udpJsonCommands"`
+	TlsJsonCommands             TlsJsonCommandsConfig                 `json:"tlsJsonCommands"`
 	StdinJsonCommands           StdinJsonCommandsConfig               `json:"stdinJsonCommands"`
 	Adb                         AdbConfig                             `json:"adb"`
 	Scrcpy                      ScrcpyConfig                          `json:"scrcpy"`
@@ -377,8 +389,13 @@ type Config struct {
 }
 
 type JsonCommandHandlerData struct {
-	From     string       `json:"from"`
-	Commands CommandSlice `json:"commands"`
+	Server       string
+	Address      string
+	HttpEndpoint string
+	HttpQuery    map[string][]string
+	HttpHeaders  map[string][]string
+	TlsClient    string
+	Commands     CommandSlice
 }
 
 var stdinDecoder *json.Decoder
@@ -444,30 +461,49 @@ func readDeviceMeta() bool {
 	return true
 }
 
-func endpointAllowed(req *http.Request) bool {
-	clients := config.HttpServer.Endpoints[req.URL.Path]
+func tlsClientAuth(clients []string, tlsState *tls.ConnectionState) string {
 	if len(clients) == 0 {
-		return true
+		return " "
 	}
 
-	var client string
-	if req.TLS != nil && len(req.TLS.PeerCertificates) > 0 {
-		client = req.TLS.PeerCertificates[0].Subject.CommonName
+	if tlsState == nil {
+		return ""
+	}
+
+	if len(tlsState.PeerCertificates) == 0 {
+		return ""
+	}
+
+	client := tlsState.PeerCertificates[0].Subject.CommonName
+
+	if len(clients) == 2 && (clients[0] == "filenames" || clients[0] == "hexfilenames") {
+		var err error
+		if clients[0] == "filenames" {
+			_, err = os.Stat(filepath.Join(clients[1], client))
+		} else {
+			_, err = os.Stat(filepath.Join(clients[1], hex.EncodeToString([]byte(client))))
+		}
+
+		if err != nil {
+			return ""
+		}
+
+		return client
 	}
 
 	for _, v := range clients {
 		if v == client {
-			return true
+			return client
 		}
 	}
 
-	return false
+	return ""
 }
 
 func commandHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -511,7 +547,7 @@ func commandHandler(w http.ResponseWriter, req *http.Request) {
 func infoHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -590,7 +626,7 @@ func infoHandler(w http.ResponseWriter, req *http.Request) {
 func listHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -676,9 +712,13 @@ func listHandler(w http.ResponseWriter, req *http.Request) {
 func jsonCommandsHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
-		w.WriteHeader(http.StatusForbidden)
-		return
+	var tlsClient string
+	if config.HttpServer.ClientAuthCa != "" {
+		tlsClient = tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS)
+		if tlsClient == "" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 	}
 
 	origin := req.Header.Get("Origin")
@@ -716,13 +756,14 @@ func jsonCommandsHandler(w http.ResponseWriter, req *http.Request) {
 			}
 
 			if len(cs) > 0 {
-				if req.URL.Path == "/jsoncommands" {
-					go runCommands(cs)
-				} else {
-					jsonCommandHandlerChannels[req.URL.Path[1:]] <- &JsonCommandHandlerData{
-						From:     req.URL.Path,
-						Commands: cs,
-					}
+				jsonCommandHandlerChannels[req.URL.Path[1:]] <- &JsonCommandHandlerData{
+					Server:       "http",
+					Address:      req.RemoteAddr,
+					HttpEndpoint: req.URL.Path,
+					HttpQuery:    req.URL.Query(),
+					HttpHeaders:  req.Header,
+					TlsClient:    tlsClient,
+					Commands:     cs,
 				}
 			}
 		}
@@ -781,7 +822,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if !config.HttpServer.Enabled && !config.TcpJsonCommands.Enabled && !config.UdpJsonCommands.Enabled && !config.StdinJsonCommands.Enabled {
+	if !config.HttpServer.Enabled && !config.TcpJsonCommands.Enabled && !config.UdpJsonCommands.Enabled && !config.TlsJsonCommands.Enabled && !config.StdinJsonCommands.Enabled {
 		os.Exit(1)
 	}
 
@@ -817,6 +858,24 @@ func main() {
 		}
 
 		if config.UdpJsonCommands.HandlerTemplate != "" && config.JsonCommandHandlerTemplates[config.UdpJsonCommands.HandlerTemplate] == "" {
+			os.Exit(1)
+		}
+	}
+
+	if config.TlsJsonCommands.Enabled {
+		if config.TlsJsonCommands.Address == "" {
+			os.Exit(1)
+		}
+
+		if config.TlsJsonCommands.Cert == "" {
+			os.Exit(1)
+		}
+
+		if config.TlsJsonCommands.Key == "" {
+			os.Exit(1)
+		}
+
+		if config.TlsJsonCommands.HandlerTemplate != "" && config.JsonCommandHandlerTemplates[config.TlsJsonCommands.HandlerTemplate] == "" {
 			os.Exit(1)
 		}
 	}
@@ -1211,8 +1270,6 @@ func main() {
 			endpoint(fmt.Sprintf("/%s", name), jsonCommandsHandler)
 		}
 
-		endpoint("/jsoncommands", jsonCommandsHandler)
-
 		if config.HttpServer.Static != "" {
 			http.Handle("/", http.FileServer(http.Dir(config.HttpServer.Static)))
 		}
@@ -1246,6 +1303,7 @@ func main() {
 		go func() {
 			listener, err := net.Listen("tcp", config.TcpJsonCommands.Address)
 			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
 				return
 			}
 			defer listener.Close()
@@ -1273,7 +1331,8 @@ func main() {
 								go runCommands(cs)
 							} else {
 								jsonCommandHandlerChannels[config.TcpJsonCommands.HandlerTemplate] <- &JsonCommandHandlerData{
-									From:     c.RemoteAddr().String(),
+									Server:   "tcp",
+									Address:  c.RemoteAddr().String(),
 									Commands: cs,
 								}
 							}
@@ -1288,6 +1347,7 @@ func main() {
 		go func() {
 			c, err := net.ListenPacket("udp", config.UdpJsonCommands.Address)
 			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
 				return
 			}
 			defer c.Close()
@@ -1307,11 +1367,93 @@ func main() {
 						go runCommands(cs)
 					} else {
 						jsonCommandHandlerChannels[config.UdpJsonCommands.HandlerTemplate] <- &JsonCommandHandlerData{
-							From:     addr.String(),
+							Server:   "udp",
+							Address:  addr.String(),
 							Commands: cs,
 						}
 					}
 				}
+			}
+		}()
+	}
+
+	if config.TlsJsonCommands.Enabled {
+		go func() {
+			serverCert, err := tls.LoadX509KeyPair(config.HttpServer.Cert, config.HttpServer.Key)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return
+			}
+
+			tlsConfig := &tls.Config{Certificates: []tls.Certificate{serverCert}}
+
+			if config.TlsJsonCommands.ClientAuthCa != "" {
+				caCert, _ := os.ReadFile(config.TlsJsonCommands.ClientAuthCa)
+				caCertPool := x509.NewCertPool()
+				caCertPool.AppendCertsFromPEM(caCert)
+				tlsConfig.ClientCAs = caCertPool
+				tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
+			}
+
+			listener, err := tls.Listen("tcp", config.TlsJsonCommands.Address, tlsConfig)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return
+			}
+			defer listener.Close()
+
+			for {
+				c, err := listener.Accept()
+				if err != nil {
+					break
+				}
+
+				go func() {
+					defer c.Close()
+
+					tlsConn, ok := c.(*tls.Conn)
+					if !ok {
+						return
+					}
+
+					err := tlsConn.Handshake()
+					if err != nil {
+						return
+					}
+
+					var client string
+					if config.TlsJsonCommands.ClientAuthCa != "" {
+						state := tlsConn.ConnectionState()
+						client = tlsClientAuth(config.TlsJsonCommands.Clients, &state)
+						if client == "" {
+							return
+						}
+					}
+
+					data := make([]byte, 1024)
+
+					for {
+						n, err := c.Read(data)
+						if err != nil {
+							break
+						}
+
+						var cs CommandSlice
+
+						if json.Unmarshal(data[:n], &cs) == nil && len(cs) > 0 {
+							if len(config.TlsJsonCommands.HandlerTemplate) == 0 {
+								go runCommands(cs)
+							} else {
+								jsonCommandHandlerChannels[config.TlsJsonCommands.HandlerTemplate] <- &JsonCommandHandlerData{
+									Server:    "tls",
+									Address:   c.RemoteAddr().String(),
+									TlsClient: client,
+									Commands:  cs,
+								}
+							}
+						}
+					}
+				}()
 			}
 		}()
 	}
@@ -1337,10 +1479,7 @@ func main() {
 					if len(config.StdinJsonCommands.HandlerTemplate) == 0 {
 						runCommands(cs)
 					} else {
-						jsonCommandHandlerChannels[config.StdinJsonCommands.HandlerTemplate] <- &JsonCommandHandlerData{
-							From:     "stdin",
-							Commands: cs,
-						}
+						jsonCommandHandlerChannels[config.StdinJsonCommands.HandlerTemplate] <- &JsonCommandHandlerData{Commands: cs}
 					}
 				}
 			}

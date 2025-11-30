@@ -10,7 +10,7 @@ import (
 func audioStreamHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}

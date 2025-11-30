@@ -64,7 +64,7 @@ func setClipboard(text string, sequence int, paste bool, timeout time.Duration) 
 func getClipboardHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -126,7 +126,7 @@ func getClipboardHandler(w http.ResponseWriter, req *http.Request) {
 func setClipboardHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -197,7 +197,7 @@ func setClipboardHandler(w http.ResponseWriter, req *http.Request) {
 func clipboardStreamHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	if config.HttpServer.ClientAuthCa != "" && !endpointAllowed(req) {
+	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}

@@ -48,7 +48,7 @@ var jsonCommandHandlerFuncs template.FuncMap = template.FuncMap{
 		if stdin != "" {
 			cmd.Stdin = strings.NewReader(stdin)
 		}
-		output, err := cmd.CombinedOutput()
+		output, err := cmd.Output()
 		result.Success = err == nil
 		result.Output = string(output)
 		return
@@ -89,7 +89,7 @@ var jsonCommandHandlerFuncs template.FuncMap = template.FuncMap{
 		result.Body = string(responseBodyBytes)
 		return
 	},
-	"httpRequestHeader": func(key string, value string) [2]string {
+	"httprequestheader": func(key string, value string) [2]string {
 		return [2]string{key, value}
 	},
 	"splithostport": func(hostport string) []string {
