@@ -83,11 +83,11 @@ func audioStreamHandler(w http.ResponseWriter, req *http.Request) {
 
 				n, err = w.Write(data)
 				if err != nil {
-					connectionControlChannel <- false
+					connectionControlChannel <- ""
 					break
 				}
 				if n < 12+packetSize {
-					connectionControlChannel <- false
+					connectionControlChannel <- ""
 					break
 				}
 
@@ -116,11 +116,11 @@ func audioStreamHandler(w http.ResponseWriter, req *http.Request) {
 
 				n, err = w.Write(packet)
 				if err != nil {
-					connectionControlChannel <- false
+					connectionControlChannel <- ""
 					break
 				}
 				if n < packetSize {
-					connectionControlChannel <- false
+					connectionControlChannel <- ""
 					break
 				}
 

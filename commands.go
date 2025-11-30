@@ -36,7 +36,13 @@ func runCommands(commands CommandSlice) bool {
 		case "connect":
 			if len(command) == 1 {
 				select {
-				case connectionControlChannel <- true:
+				case connectionControlChannel <- config.Scrcpy.Address:
+				default:
+					return false
+				}
+			} else if len(command) == 2 && config.Scrcpy.Forward {
+				select {
+				case connectionControlChannel <- command[1]:
 				default:
 					return false
 				}
@@ -50,7 +56,7 @@ func runCommands(commands CommandSlice) bool {
 				}
 
 				select {
-				case connectionControlChannel <- false:
+				case connectionControlChannel <- "":
 				default:
 					return false
 				}
@@ -130,7 +136,7 @@ func runCommands(commands CommandSlice) bool {
 
 			if scrcpyServer != nil {
 				select {
-				case connectionControlChannel <- false:
+				case connectionControlChannel <- "":
 					time.Sleep(1 * time.Second)
 				default:
 				}
@@ -154,7 +160,7 @@ func runCommands(commands CommandSlice) bool {
 				}
 
 				select {
-				case connectionControlChannel <- false:
+				case connectionControlChannel <- "":
 					time.Sleep(1 * time.Second)
 				default:
 				}

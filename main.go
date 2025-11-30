@@ -293,7 +293,7 @@ func (c *AdbConfig) UnmarshalJSON(data []byte) error {
 
 type ScrcpyConfig struct {
 	Enabled           bool         `json:"enabled"`
-	Port              int          `json:"port"`
+	Address           string       `json:"address"`
 	Video             bool         `json:"video"`
 	Audio             bool         `json:"audio"`
 	Control           bool         `json:"control"`
@@ -315,7 +315,7 @@ func (c *ScrcpyConfig) UnmarshalJSON(data []byte) error {
 
 	scrcpyC := ScrcpyC{
 		Enabled:       true,
-		Port:          27183,
+		Address:       "127.0.0.1:27183",
 		Server:        "/data/local/tmp/scrcpy-server.jar",
 		ServerVersion: "3.3.3",
 	}
@@ -404,7 +404,7 @@ var scrcpyListener net.Listener
 var videoSocket net.Conn
 var audioSocket net.Conn
 var controlSocket net.Conn
-var connectionControlChannel chan bool = make(chan bool)
+var connectionControlChannel chan string = make(chan string)
 var videoConnectedChannel chan struct{} = make(chan struct{})
 var audioConnectedChannel chan struct{} = make(chan struct{})
 var clipboardChannel chan string = make(chan string)
@@ -830,10 +830,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	if config.Scrcpy.Enabled && config.Scrcpy.Port < 1 {
-		os.Exit(1)
-	}
-
 	if config.VideoDecoder.Enabled && !config.Scrcpy.Enabled {
 		os.Exit(1)
 	}
@@ -916,15 +912,27 @@ func main() {
 			var err error
 
 			if !config.Scrcpy.Forward {
-				scrcpyListener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", config.Scrcpy.Port))
+				scrcpyListener, err = net.Listen("tcp", config.Scrcpy.Address)
 				if err != nil {
 					return
 				}
 				defer scrcpyListener.Close()
 			}
 
-			for connect := range connectionControlChannel {
-				if connect {
+			for address := range connectionControlChannel {
+				if address == "" {
+					if videoSocket != nil {
+						videoSocket.Close()
+					}
+
+					if audioSocket != nil {
+						audioSocket.Close()
+					}
+
+					if controlSocket != nil {
+						controlSocket.Close()
+					}
+				} else {
 					if config.Scrcpy.Forward {
 						var connected bool
 
@@ -946,7 +954,7 @@ func main() {
 							}
 
 							if config.Scrcpy.Video {
-								videoSocket, err = net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", config.Scrcpy.Port))
+								videoSocket, err = net.Dial("tcp", address)
 								if err != nil {
 									break
 								}
@@ -957,7 +965,7 @@ func main() {
 							}
 
 							if config.Scrcpy.Audio {
-								audioSocket, err = net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", config.Scrcpy.Port))
+								audioSocket, err = net.Dial("tcp", address)
 								if err != nil {
 									break
 								}
@@ -968,7 +976,7 @@ func main() {
 							}
 
 							if config.Scrcpy.Control {
-								controlSocket, err = net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", config.Scrcpy.Port))
+								controlSocket, err = net.Dial("tcp", address)
 								if err != nil {
 									break
 								}
@@ -1054,7 +1062,7 @@ func main() {
 
 					if config.Scrcpy.Control {
 						if !createUhidDevices() {
-							go func() { connectionControlChannel <- false }()
+							go func() { connectionControlChannel <- "" }()
 							continue
 						}
 
@@ -1160,18 +1168,6 @@ func main() {
 
 					if len(scrcpyConnectedCommands) > 0 {
 						go runCommands(scrcpyConnectedCommands)
-					}
-				} else {
-					if videoSocket != nil {
-						videoSocket.Close()
-					}
-
-					if audioSocket != nil {
-						audioSocket.Close()
-					}
-
-					if controlSocket != nil {
-						controlSocket.Close()
 					}
 				}
 			}
@@ -1491,7 +1487,7 @@ func main() {
 	<-interrupt
 
 	select {
-	case connectionControlChannel <- false:
+	case connectionControlChannel <- "":
 	default:
 	}
 }

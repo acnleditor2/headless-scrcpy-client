@@ -87,11 +87,11 @@ func videoStreamHandler(w http.ResponseWriter, req *http.Request) {
 
 				n, err = w.Write(data)
 				if err != nil {
-					connectionControlChannel <- false
+					connectionControlChannel <- ""
 					break
 				}
 				if n < 12+packetSize {
-					connectionControlChannel <- false
+					connectionControlChannel <- ""
 					break
 				}
 
@@ -120,11 +120,11 @@ func videoStreamHandler(w http.ResponseWriter, req *http.Request) {
 
 				n, err = w.Write(packet)
 				if err != nil {
-					connectionControlChannel <- false
+					connectionControlChannel <- ""
 					break
 				}
 				if n < packetSize {
-					connectionControlChannel <- false
+					connectionControlChannel <- ""
 					break
 				}
 
@@ -275,11 +275,11 @@ func decodeVideo() {
 
 			n, err = decoderStdin.Write(data)
 			if err != nil {
-				connectionControlChannel <- false
+				connectionControlChannel <- ""
 				break
 			}
 			if n < 12+packetSize {
-				connectionControlChannel <- false
+				connectionControlChannel <- ""
 				break
 			}
 		}
@@ -425,11 +425,11 @@ func decodeVideoFfmpeg() {
 
 			n, err = ffmpegStdin.Write(packet)
 			if err != nil {
-				connectionControlChannel <- false
+				connectionControlChannel <- ""
 				break
 			}
 			if n < packetSize {
-				connectionControlChannel <- false
+				connectionControlChannel <- ""
 				break
 			}
 		}
