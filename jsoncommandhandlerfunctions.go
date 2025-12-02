@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"io"
 	"net"
 	"net/http"
@@ -136,6 +137,21 @@ var jsonCommandHandlerFuncs template.FuncMap = template.FuncMap{
 		}
 
 		return []string{host, port}
+	},
+	"hexencode": func(s string) string {
+		return hex.EncodeToString([]byte(s))
+	},
+	"hexdecode": func(s string) []string {
+		decoded, err := hex.DecodeString(s)
+		if err != nil {
+			return nil
+		}
+
+		return []string{string(decoded)}
+	},
+	"iscustomcommand": func(s string) bool {
+		_, ok := config.CustomCommands[s]
+		return ok
 	},
 	"command": func(c ...string) CommandSlice {
 		return CommandSlice([][]string{c})
