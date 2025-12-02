@@ -61,7 +61,7 @@ func setClipboard(text string, sequence int, paste bool, timeout time.Duration) 
 	return true
 }
 
-func getClipboardHandler(w http.ResponseWriter, req *http.Request) {
+func clipboardHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
 	if config.HttpServer.ClientAuthCa != "" && tlsClientAuth(config.HttpServer.Endpoints[req.URL.Path], req.TLS) == "" {
@@ -167,14 +167,7 @@ func setClipboardHandler(w http.ResponseWriter, req *http.Request) {
 				return
 			}
 
-			timeoutString := query.Get("timeout")
-			if timeoutString != "" {
-				timeout, err = time.ParseDuration(timeoutString)
-				if err != nil {
-					w.WriteHeader(http.StatusBadRequest)
-					return
-				}
-			}
+			timeout = 2 * time.Second
 		}
 
 		if !setClipboard(query.Get("text"), sequence, req.URL.Path == "/setclipboardpaste", timeout) {

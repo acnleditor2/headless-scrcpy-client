@@ -1189,8 +1189,6 @@ func main() {
 		if config.Scrcpy.Enabled {
 			endpoint("/connect", commandHandler)
 			endpoint("/disconnect", commandHandler)
-			endpoint("/startscrcpyserver", commandHandler)
-			endpoint("/stopscrcpyserver", commandHandler)
 			endpoint("/devicename", infoHandler)
 
 			if config.Scrcpy.Video {
@@ -1231,10 +1229,10 @@ func main() {
 				endpoint("/scrolldown", scrollHandler)
 				endpoint("/getclipboard", commandHandler)
 				endpoint("/getclipboardcut", commandHandler)
+				endpoint("/clipboard", clipboardHandler)
+				endpoint("/clipboardcut", clipboardHandler)
 				endpoint("/setclipboard", setClipboardHandler)
 				endpoint("/setclipboardpaste", setClipboardHandler)
-				endpoint("/clipboard", getClipboardHandler)
-				endpoint("/clipboardcut", getClipboardHandler)
 				endpoint("/clipboardstream", clipboardStreamHandler)
 				endpoint("/uhidinput", uhidInputHandler)
 				endpoint("/uhidoutputstream", uhidOutputStreamHandler)
@@ -1250,6 +1248,8 @@ func main() {
 			}
 
 			if config.Adb.Enabled {
+				endpoint("/startscrcpyserver", commandHandler)
+				endpoint("/stopscrcpyserver", commandHandler)
 				endpoint("/encoders", listHandler)
 				endpoint("/displays", listHandler)
 				endpoint("/cameras", listHandler)
