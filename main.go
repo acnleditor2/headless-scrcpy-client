@@ -1318,15 +1318,21 @@ func main() {
 
 						var cs CommandSlice
 
-						if json.Unmarshal(data[:n], &cs) == nil && len(cs) > 0 {
-							if len(config.TcpJsonCommands.HandlerTemplate) == 0 {
-								go runCommands(cs)
-							} else {
-								jsonCommandHandlerChannels[config.TcpJsonCommands.HandlerTemplate] <- &JsonCommandHandlerData{
-									Server:   "tcp",
-									Address:  c.RemoteAddr().String(),
-									Commands: cs,
-								}
+						if json.Unmarshal(data[:n], &cs) != nil {
+							return
+						}
+
+						if len(cs) == 0 {
+							return
+						}
+
+						if len(config.TcpJsonCommands.HandlerTemplate) == 0 {
+							go runCommands(cs)
+						} else {
+							jsonCommandHandlerChannels[config.TcpJsonCommands.HandlerTemplate] <- &JsonCommandHandlerData{
+								Server:   "tcp",
+								Address:  c.RemoteAddr().String(),
+								Commands: cs,
 							}
 						}
 					}
@@ -1354,15 +1360,21 @@ func main() {
 
 				var cs CommandSlice
 
-				if json.Unmarshal(data[:n], &cs) == nil && len(cs) > 0 {
-					if len(config.UdpJsonCommands.HandlerTemplate) == 0 {
-						go runCommands(cs)
-					} else {
-						jsonCommandHandlerChannels[config.UdpJsonCommands.HandlerTemplate] <- &JsonCommandHandlerData{
-							Server:   "udp",
-							Address:  addr.String(),
-							Commands: cs,
-						}
+				if json.Unmarshal(data[:n], &cs) != nil {
+					return
+				}
+
+				if len(cs) == 0 {
+					return
+				}
+
+				if len(config.UdpJsonCommands.HandlerTemplate) == 0 {
+					go runCommands(cs)
+				} else {
+					jsonCommandHandlerChannels[config.UdpJsonCommands.HandlerTemplate] <- &JsonCommandHandlerData{
+						Server:   "udp",
+						Address:  addr.String(),
+						Commands: cs,
 					}
 				}
 			}
