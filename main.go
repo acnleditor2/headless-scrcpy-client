@@ -282,7 +282,7 @@ func (c *AdbConfig) UnmarshalJSON(data []byte) error {
 		*c = AdbConfig(adbC)
 	}
 
-	if c.Executable == "" {
+	if c.Enabled && c.Executable == "" {
 		var err error
 		c.Executable, err = exec.LookPath("adb")
 		return err
@@ -358,7 +358,7 @@ func (c *VideoDecoderConfig) UnmarshalJSON(data []byte) error {
 		*c = VideoDecoderConfig(videoDecoderC)
 	}
 
-	if c.Executable == "" {
+	if c.Enabled && c.Executable == "" {
 		var err error
 		c.Executable, err = exec.LookPath("ffmpeg")
 		return err
@@ -823,10 +823,6 @@ func main() {
 	}
 
 	if !config.HttpServer.Enabled && !config.TcpJsonCommands.Enabled && !config.UdpJsonCommands.Enabled && !config.TlsJsonCommands.Enabled && !config.StdinJsonCommands.Enabled {
-		os.Exit(1)
-	}
-
-	if config.Adb.Enabled && config.Adb.Executable == "" {
 		os.Exit(1)
 	}
 

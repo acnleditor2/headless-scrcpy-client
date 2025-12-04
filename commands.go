@@ -740,7 +740,7 @@ func runCommands(commands CommandSlice) bool {
 				return false
 			}
 		case "adb", "adb2":
-			if len(command) == 2 && config.Adb.Enabled && config.Adb.Executable != "" && (command[1] == "connect" || command[1] == "disconnect") {
+			if len(command) == 2 && config.Adb.Enabled && (command[1] == "connect" || command[1] == "disconnect") {
 				args := append(config.Adb.Options, command[1], config.Adb.Device)
 
 				cmd := exec.Command(config.Adb.Executable, args...)
@@ -750,7 +750,7 @@ func runCommands(commands CommandSlice) bool {
 				if cmd.Run() != nil && command[0] == "adb" {
 					return false
 				}
-			} else if len(command) > 1 && config.Adb.Enabled && config.Adb.Executable != "" {
+			} else if len(command) > 1 && config.Adb.Enabled {
 				var args []string
 				if config.Adb.Device == "usb" {
 					args = append(config.Adb.Options, "-d")

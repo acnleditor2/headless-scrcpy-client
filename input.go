@@ -400,7 +400,7 @@ func typeHandler(w http.ResponseWriter, req *http.Request) {
 		}
 
 		text := req.URL.Query().Get("text")
-		if text != "" {
+		if text == "" {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
